@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -17,3 +17,9 @@ db.sqlite3
 
 # VS Code
 .vscode/
+
+# Firebase
+firebase-credentials.json
+
+# Media files
+media/

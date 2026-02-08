@@ -11,21 +11,39 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
+import os
+from dotenv import load_dotenv
+import firebase_admin
+from firebase_admin import credentials
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables from .env file
+load_dotenv(os.path.join(BASE_DIR, '.env'))
+
+# Firebase Admin SDK Configuration
+FIREBASE_CREDENTIALS_PATH = os.path.join(BASE_DIR, os.getenv('FIREBASE_CREDENTIALS_PATH', 'firebase-credentials.json'))
+
+if os.path.exists(FIREBASE_CREDENTIALS_PATH):
+    cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
+    firebase_admin.initialize_app(cred)
+else:
+    # For production, use environment variable or default credentials
+    firebase_admin.initialize_app()
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-&209meettb4m_o=naqd$rl5kvj2=o^j(gb@#6b53b2+19lw+5j'
+SECRET_KEY = os.getenv('SECRET_KEY', 'fallback-insecure-key-change-me')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = []
+# Allow LAN connections for physical device testing
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
@@ -78,8 +96,12 @@ WSGI_APPLICATION = 'fyp_backend.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DB_NAME', 'aviansense_db'),
+        'USER': os.getenv('DB_USER', 'postgres'),
+        'PASSWORD': os.getenv('DB_PASSWORD', 'postgres'),
+        'HOST': os.getenv('DB_HOST', 'localhost'),
+        'PORT': os.getenv('DB_PORT', '5432'),
     }
 }
 
@@ -120,11 +142,27 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
-# Allow Flutter during development; tighten for production.
-CORS_ALLOW_ALL_ORIGINS = True
+# Media files (User uploads)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# CORS: Allow specific origins for production; permissive for dev.
+CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only allow all in dev mode
+
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:3000',
+    'http://127.0.0.1:8000',
+    'http://192.168.100.12:8000',
+]
+
+# Also allow mobile app requests (no Origin header) via:
+CORS_ALLOW_CREDENTIALS = True
 
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': (
         'rest_framework.renderers.JSONRenderer',
-    )
+    ),
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'api.authentication.FirebaseAuthentication',
+    ),
 }
