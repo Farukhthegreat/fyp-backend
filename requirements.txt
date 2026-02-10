@@ -1,4 +1,4 @@
-﻿anyio==4.12.1
+anyio==4.12.1
 asgiref==3.11.1
 CacheControl==0.14.4
 certifi==2026.1.4
