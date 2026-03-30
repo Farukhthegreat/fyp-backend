@@ -120,8 +120,10 @@ class DiagnoseView(APIView):
 
         # Create DiagnosisResult in the database
         is_healthy = prediction['disease_name'].lower() == 'healthy'
+        farm = Farm.objects.filter(user=request.user).first()
         diagnosis = DiagnosisResult.objects.create(
             user=request.user,
+            farm=farm,
             image=image_file,
             disease_name=prediction['disease_name'],
             confidence=prediction['confidence'],

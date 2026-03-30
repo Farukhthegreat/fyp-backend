@@ -50,6 +50,7 @@ class DiagnosisResultSerializer(serializers.ModelSerializer):
     image_url returns the full URL for the uploaded image.
     """
     image_url = serializers.SerializerMethodField()
+    farm_name = serializers.SerializerMethodField()
 
     class Meta:
         model = DiagnosisResult
@@ -63,6 +64,7 @@ class DiagnosisResultSerializer(serializers.ModelSerializer):
             'status',
             'description',
             'notes',
+            'farm_name',
             'created_at',
         ]
         read_only_fields = ['created_at']
@@ -78,3 +80,12 @@ class DiagnosisResultSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(obj.image.url)
             return obj.image.url
         return None
+
+    def get_farm_name(self, obj):
+        """Return the farm name from the related farm or user's first farm."""
+        if obj.farm and obj.farm.name:
+            return obj.farm.name
+        # Fallback: get user's first farm
+        from .models import Farm
+        farm = Farm.objects.filter(user=obj.user).first()
+        return farm.name if farm else 'My Farm'
