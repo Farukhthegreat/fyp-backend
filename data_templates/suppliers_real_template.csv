@@ -1,0 +1,2 @@
+name,supplier_type,phone,whatsapp,location,latitude,longitude,is_active,product_name,product_name_ur,price,unit,product_is_available
+Example Feed Supplier,feed,+923331112233,+923331112233,Rawalpindi,, ,true,Broiler Feed,,4200,per 50kg bag,true

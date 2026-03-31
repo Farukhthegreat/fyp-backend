@@ -7,6 +7,13 @@ import sys
 def main():
     """Run administrative tasks."""
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'fyp_backend.settings')
+
+    # Make local mobile testing work out of the box.
+    # If user runs `python manage.py runserver` without addr/port,
+    # expose server on LAN instead of localhost-only.
+    if len(sys.argv) == 2 and sys.argv[1] == 'runserver':
+        sys.argv.append('0.0.0.0:8000')
+
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

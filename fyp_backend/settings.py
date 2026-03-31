@@ -78,6 +78,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'corsheaders',
     'rest_framework',
+    'cloudinary_storage',
+    'cloudinary',
     'api',
 ]
 
@@ -116,7 +118,7 @@ WSGI_APPLICATION = 'fyp_backend.wsgi.application'
 # ---------------------------------------------------------------------------
 # Database
 # Cloud: uses DATABASE_URL (single connection string from Neon/Render)
-# Local: uses SQLite by default, or PostgreSQL if DB_ENGINE is set
+# Local: uses PostgreSQL only
 # ---------------------------------------------------------------------------
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -126,26 +128,16 @@ if DATABASE_URL:
         'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
     }
 else:
-    # Local development
-    DB_ENGINE = os.getenv('DB_ENGINE', 'django.db.backends.sqlite3')
-    if 'sqlite' in DB_ENGINE:
-        DATABASES = {
-            'default': {
-                'ENGINE': 'django.db.backends.sqlite3',
-                'NAME': BASE_DIR / 'db.sqlite3',
-            }
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('DB_NAME', 'aviansense_db'),
+            'USER': os.getenv('DB_USER', 'postgres'),
+            'PASSWORD': os.getenv('DB_PASSWORD', 'postgres'),
+            'HOST': os.getenv('DB_HOST', 'localhost'),
+            'PORT': os.getenv('DB_PORT', '5432'),
         }
-    else:
-        DATABASES = {
-            'default': {
-                'ENGINE': 'django.db.backends.postgresql',
-                'NAME': os.getenv('DB_NAME', 'aviansense_db'),
-                'USER': os.getenv('DB_USER', 'postgres'),
-                'PASSWORD': os.getenv('DB_PASSWORD', 'postgres'),
-                'HOST': os.getenv('DB_HOST', 'localhost'),
-                'PORT': os.getenv('DB_PORT', '5432'),
-            }
-        }
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +170,18 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 # Media files (User uploads)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# ---------------------------------------------------------------------------
+# Cloudinary — persistent cloud storage for uploaded images (production)
+# Set CLOUDINARY_URL env var on Render: cloudinary://API_KEY:API_SECRET@CLOUD_NAME
+# In dev, falls back to local filesystem storage
+# ---------------------------------------------------------------------------
+CLOUDINARY_URL = os.getenv('CLOUDINARY_URL')
+if CLOUDINARY_URL:
+    CLOUDINARY_STORAGE = {
+        'CLOUDINARY_URL': CLOUDINARY_URL,
+    }
+    DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
 
 
 # ---------------------------------------------------------------------------
