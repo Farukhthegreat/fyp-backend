@@ -318,7 +318,7 @@ class ChatMessageListCreateView(APIView):
                 fcm_token=recipient_farm.fcm_token,
                 title=f'New message from {sender_name}',
                 body=message_text[:100],
-                data={'type': 'chat', 'room_id': str(room.id)},
+                data={'type': 'chat', 'room_id': str(room.id), 'sender_name': sender_name},
             )
 
         serializer = ChatMessageSerializer(msg)
@@ -615,7 +615,6 @@ class AnalyticsView(APIView):
                 {'date': str(thirty_days_ago + timedelta(days=i)),
                  'count': mort_map.get(str(thirty_days_ago + timedelta(days=i)), 0)}
                 for i in range(31)
-                if str(thirty_days_ago + timedelta(days=i)) in mort_map
             ]
 
         # Upcoming vaccinations

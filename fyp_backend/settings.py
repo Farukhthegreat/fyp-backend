@@ -185,15 +185,10 @@ if CLOUDINARY_URL:
 
 
 # ---------------------------------------------------------------------------
-# CORS — allow Flutter app requests from any origin (mobile apps don't send Origin)
+# CORS — allow all origins (Flutter mobile doesn't send Origin, and this is an
+# API-only backend with Firebase token auth — CORS is not a security boundary here)
 # ---------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = DEBUG
-
-CORS_ALLOWED_ORIGINS = os.getenv(
-    'CORS_ALLOWED_ORIGINS',
-    'http://localhost:3000,http://127.0.0.1:8000'
-).split(',')
-
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 
 
