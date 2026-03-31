@@ -2,7 +2,8 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from .models import (
     Farm, DiagnosisResult, Supplier, SupplierProduct,
-    Expert, ChatRoom, ChatMessage, DailyTask, TaskCompletion, Article
+    Expert, ChatRoom, ChatMessage, DailyTask, TaskCompletion, Article,
+    VaccinationRecord, MortalityLog, TreatmentRecord,
 )
 
 
@@ -26,12 +27,13 @@ class UserProfileSerializer(serializers.Serializer):
     last_name = serializers.CharField(source='user.last_name')
     farm_name = serializers.CharField(source='name')
     location = serializers.CharField()
+    flock_size = serializers.IntegerField(required=False)
+    fcm_token = serializers.CharField(required=False, allow_blank=True)
 
     def create(self, validated_data):
         pass
 
     def update(self, instance, validated_data):
-        # DRF nests source='user.xxx' fields under a 'user' dict
         user_data = validated_data.get('user', {})
         user = instance.user
         if 'email' in user_data:
@@ -42,11 +44,14 @@ class UserProfileSerializer(serializers.Serializer):
             user.last_name = user_data['last_name']
         user.save()
 
-        # Farm fields: 'name' comes from source='name', 'location' is direct
         if 'name' in validated_data:
             instance.name = validated_data['name']
         if 'location' in validated_data:
             instance.location = validated_data['location']
+        if 'flock_size' in validated_data:
+            instance.flock_size = validated_data['flock_size']
+        if 'fcm_token' in validated_data:
+            instance.fcm_token = validated_data['fcm_token']
         instance.save()
 
         return instance
@@ -202,3 +207,34 @@ class ArticleDetailSerializer(serializers.ModelSerializer):
             'id', 'title', 'title_ur', 'content', 'content_ur',
             'category', 'image_url', 'created_at',
         ]
+
+
+class VaccinationRecordSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VaccinationRecord
+        fields = [
+            'id', 'vaccine_name', 'vaccine_name_ur', 'date_administered',
+            'next_due_date', 'flock_age_days', 'dose_count', 'notes', 'created_at',
+        ]
+        read_only_fields = ['created_at']
+
+
+class MortalityLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MortalityLog
+        fields = ['id', 'date', 'count', 'cause', 'notes', 'created_at']
+        read_only_fields = ['created_at']
+
+
+class TreatmentRecordSerializer(serializers.ModelSerializer):
+    diagnosis_disease = serializers.CharField(
+        source='diagnosis_result.disease_name', read_only=True, default=None
+    )
+
+    class Meta:
+        model = TreatmentRecord
+        fields = [
+            'id', 'diagnosis_result', 'diagnosis_disease', 'medication_name',
+            'start_date', 'end_date', 'dosage', 'notes', 'created_at',
+        ]
+        read_only_fields = ['created_at']

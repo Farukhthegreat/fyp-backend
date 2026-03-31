@@ -6,6 +6,10 @@ from .views import (
     ExpertListView, ChatRoomListCreateView, ChatMessageListCreateView,
     TaskListView, TaskCompleteView, TaskSummaryView,
     ArticleListView, ArticleDetailView,
+    VaccinationListCreateView, VaccinationDetailView,
+    MortalityListCreateView, MortalityDetailView,
+    TreatmentListCreateView, TreatmentDetailView,
+    FlockSummaryView, AnalyticsView,
 )
 
 urlpatterns = [
@@ -35,4 +39,16 @@ urlpatterns = [
     # Education
     path('articles/', ArticleListView.as_view(), name='article-list'),
     path('articles/<int:pk>/', ArticleDetailView.as_view(), name='article-detail'),
+
+    # Flock Health Records
+    path('flock/vaccinations/', VaccinationListCreateView.as_view(), name='vaccination-list'),
+    path('flock/vaccinations/<int:pk>/', VaccinationDetailView.as_view(), name='vaccination-detail'),
+    path('flock/mortality/', MortalityListCreateView.as_view(), name='mortality-list'),
+    path('flock/mortality/<int:pk>/', MortalityDetailView.as_view(), name='mortality-detail'),
+    path('flock/treatments/', TreatmentListCreateView.as_view(), name='treatment-list'),
+    path('flock/treatments/<int:pk>/', TreatmentDetailView.as_view(), name='treatment-detail'),
+    path('flock/summary/', FlockSummaryView.as_view(), name='flock-summary'),
+
+    # Analytics
+    path('analytics/', AnalyticsView.as_view(), name='analytics'),
 ]

@@ -10,6 +10,7 @@ class Farm(models.Model):
     name = models.CharField(max_length=255)
     location = models.CharField(max_length=255)
     flock_size = models.IntegerField()
+    fcm_token = models.CharField(max_length=512, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -173,4 +174,60 @@ class Article(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+
+class VaccinationRecord(models.Model):
+    farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='vaccinations')
+    vaccine_name = models.CharField(max_length=255)
+    vaccine_name_ur = models.CharField(max_length=255, blank=True, default='')
+    date_administered = models.DateField()
+    next_due_date = models.DateField(null=True, blank=True)
+    flock_age_days = models.IntegerField(default=0)
+    dose_count = models.IntegerField(default=1)
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.vaccine_name} - {self.farm.name} ({self.date_administered})"
+
+    class Meta:
+        ordering = ['-date_administered']
+
+
+class MortalityLog(models.Model):
+    CAUSE_CHOICES = [
+        ('disease', 'Disease'), ('unknown', 'Unknown'),
+        ('accident', 'Accident'), ('heat', 'Heat Stress'), ('cold', 'Cold Stress'),
+    ]
+    farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='mortality_logs')
+    date = models.DateField()
+    count = models.IntegerField(default=1)
+    cause = models.CharField(max_length=20, choices=CAUSE_CHOICES, default='unknown')
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.count} birds - {self.cause} - {self.date}"
+
+    class Meta:
+        ordering = ['-date']
+
+
+class TreatmentRecord(models.Model):
+    farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='treatments')
+    diagnosis_result = models.ForeignKey(
+        DiagnosisResult, on_delete=models.SET_NULL, null=True, blank=True, related_name='treatments'
+    )
+    medication_name = models.CharField(max_length=255)
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+    dosage = models.CharField(max_length=255, blank=True, default='')
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.medication_name} - {self.farm.name} ({self.start_date})"
+
+    class Meta:
+        ordering = ['-start_date']
 

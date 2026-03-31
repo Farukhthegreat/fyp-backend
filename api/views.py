@@ -1,21 +1,26 @@
 import math
-from datetime import date
+from datetime import date, timedelta
+from collections import defaultdict
 
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, generics
+from django.db.models import Sum
 from .models import (
     DiagnosisResult, Farm, Supplier, Expert, ChatRoom, ChatMessage,
-    DailyTask, TaskCompletion, Article
+    DailyTask, TaskCompletion, Article,
+    VaccinationRecord, MortalityLog, TreatmentRecord,
 )
 from .serializers import (
     DiagnosisResultSerializer, UserProfileSerializer,
     SupplierSerializer, SupplierListSerializer, ExpertSerializer,
     ChatRoomSerializer, ChatMessageSerializer,
     DailyTaskSerializer, ArticleListSerializer, ArticleDetailSerializer,
+    VaccinationRecordSerializer, MortalityLogSerializer, TreatmentRecordSerializer,
 )
 from .ai_engine import predict_disease
+from .notifications import send_fcm_notification
 
 
 class HealthView(APIView):
@@ -303,6 +308,19 @@ class ChatMessageListCreateView(APIView):
 
         msg = ChatMessage.objects.create(room=room, sender=request.user, message=message_text)
         room.save()  # update updated_at
+
+        # Send FCM push notification to the recipient
+        recipient = room.expert if request.user == room.farmer else room.farmer
+        recipient_farm = Farm.objects.filter(user=recipient).first()
+        if recipient_farm and recipient_farm.fcm_token:
+            sender_name = request.user.first_name or 'Someone'
+            send_fcm_notification(
+                fcm_token=recipient_farm.fcm_token,
+                title=f'New message from {sender_name}',
+                body=message_text[:100],
+                data={'type': 'chat', 'room_id': str(room.id)},
+            )
+
         serializer = ChatMessageSerializer(msg)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -403,3 +421,232 @@ class ArticleDetailView(generics.RetrieveAPIView):
     queryset = Article.objects.filter(is_published=True)
 
 
+# ---------------------------------------------------------------------------
+# Flock Health Records
+# ---------------------------------------------------------------------------
+
+class VaccinationListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        farm = Farm.objects.filter(user=request.user).first()
+        if not farm:
+            return Response([])
+        records = VaccinationRecord.objects.filter(farm=farm)
+        return Response(VaccinationRecordSerializer(records, many=True).data)
+
+    def post(self, request):
+        farm = Farm.objects.filter(user=request.user).first()
+        if not farm:
+            return Response({'error': 'No farm found'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = VaccinationRecordSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(farm=farm)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class VaccinationDetailView(generics.DestroyAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = VaccinationRecordSerializer
+
+    def get_queryset(self):
+        farm = Farm.objects.filter(user=self.request.user).first()
+        if not farm:
+            return VaccinationRecord.objects.none()
+        return VaccinationRecord.objects.filter(farm=farm)
+
+
+class MortalityListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        farm = Farm.objects.filter(user=request.user).first()
+        if not farm:
+            return Response([])
+        records = MortalityLog.objects.filter(farm=farm)
+        return Response(MortalityLogSerializer(records, many=True).data)
+
+    def post(self, request):
+        farm = Farm.objects.filter(user=request.user).first()
+        if not farm:
+            return Response({'error': 'No farm found'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = MortalityLogSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(farm=farm)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class MortalityDetailView(generics.DestroyAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = MortalityLogSerializer
+
+    def get_queryset(self):
+        farm = Farm.objects.filter(user=self.request.user).first()
+        if not farm:
+            return MortalityLog.objects.none()
+        return MortalityLog.objects.filter(farm=farm)
+
+
+class TreatmentListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        farm = Farm.objects.filter(user=request.user).first()
+        if not farm:
+            return Response([])
+        records = TreatmentRecord.objects.filter(farm=farm)
+        return Response(TreatmentRecordSerializer(records, many=True).data)
+
+    def post(self, request):
+        farm = Farm.objects.filter(user=request.user).first()
+        if not farm:
+            return Response({'error': 'No farm found'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = TreatmentRecordSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(farm=farm)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TreatmentDetailView(generics.DestroyAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = TreatmentRecordSerializer
+
+    def get_queryset(self):
+        farm = Farm.objects.filter(user=self.request.user).first()
+        if not farm:
+            return TreatmentRecord.objects.none()
+        return TreatmentRecord.objects.filter(farm=farm)
+
+
+class FlockSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        farm = Farm.objects.filter(user=request.user).first()
+        if not farm:
+            return Response({'error': 'No farm found'}, status=status.HTTP_404_NOT_FOUND)
+
+        today = date.today()
+        thirty_days_ago = today - timedelta(days=30)
+
+        total_mortality = MortalityLog.objects.filter(
+            farm=farm, date__gte=thirty_days_ago
+        ).aggregate(total=Sum('count'))['total'] or 0
+
+        upcoming_vaccinations = VaccinationRecord.objects.filter(
+            farm=farm,
+            next_due_date__gte=today,
+            next_due_date__lte=today + timedelta(days=30),
+        ).values('vaccine_name', 'next_due_date').order_by('next_due_date')[:5]
+
+        active_treatments = TreatmentRecord.objects.filter(
+            farm=farm,
+            start_date__lte=today,
+        ).filter(end_date__isnull=True) | TreatmentRecord.objects.filter(
+            farm=farm,
+            start_date__lte=today,
+            end_date__gte=today,
+        )
+
+        return Response({
+            'mortality_last_30_days': total_mortality,
+            'upcoming_vaccinations': list(upcoming_vaccinations),
+            'active_treatments': TreatmentRecordSerializer(active_treatments.distinct(), many=True).data,
+        })
+
+
+# ---------------------------------------------------------------------------
+# Analytics
+# ---------------------------------------------------------------------------
+
+class AnalyticsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        today = date.today()
+        thirty_days_ago = today - timedelta(days=30)
+        farm = Farm.objects.filter(user=request.user).first()
+
+        # Diagnosis trend: count per day for last 30 days
+        diagnoses = DiagnosisResult.objects.filter(
+            user=request.user, created_at__date__gte=thirty_days_ago
+        ).values('created_at__date', 'status')
+
+        trend_map = defaultdict(lambda: {'count': 0, 'alerts': 0})
+        for d in diagnoses:
+            day = str(d['created_at__date'])
+            trend_map[day]['count'] += 1
+            if d['status'] == 'Alert':
+                trend_map[day]['alerts'] += 1
+        diagnosis_trend = [
+            {'date': k, 'count': v['count'], 'alerts': v['alerts']}
+            for k, v in sorted(trend_map.items())
+        ]
+
+        # Disease breakdown
+        disease_counts = defaultdict(int)
+        for d in DiagnosisResult.objects.filter(user=request.user):
+            disease_counts[d.disease_name] += 1
+        disease_breakdown = [
+            {'disease': k, 'count': v}
+            for k, v in sorted(disease_counts.items(), key=lambda x: -x[1])
+        ]
+
+        # Task completion rate (last 7 days)
+        flock_size = farm.flock_size if farm else 0
+        eligible_tasks = DailyTask.objects.filter(is_active=True, min_flock_size__lte=flock_size)
+        total_possible = eligible_tasks.count() * 7
+        completed_count = TaskCompletion.objects.filter(
+            user=request.user,
+            date__gte=today - timedelta(days=7),
+            task__in=eligible_tasks,
+        ).count()
+        task_completion_rate = round(completed_count / total_possible, 2) if total_possible > 0 else 0.0
+
+        # Mortality trend (last 30 days)
+        mortality_data = []
+        if farm:
+            mort_qs = MortalityLog.objects.filter(farm=farm, date__gte=thirty_days_ago).values('date', 'count')
+            mort_map = {str(m['date']): m['count'] for m in mort_qs}
+            mortality_data = [
+                {'date': str(thirty_days_ago + timedelta(days=i)),
+                 'count': mort_map.get(str(thirty_days_ago + timedelta(days=i)), 0)}
+                for i in range(31)
+                if str(thirty_days_ago + timedelta(days=i)) in mort_map
+            ]
+
+        # Upcoming vaccinations
+        upcoming_vaccinations = []
+        if farm:
+            upcoming_vaccinations = list(
+                VaccinationRecord.objects.filter(
+                    farm=farm,
+                    next_due_date__gte=today,
+                    next_due_date__lte=today + timedelta(days=30),
+                ).values('vaccine_name', 'next_due_date').order_by('next_due_date')[:5]
+            )
+            for v in upcoming_vaccinations:
+                v['next_due_date'] = str(v['next_due_date'])
+
+        # Flock health score (0-100)
+        alert_count = DiagnosisResult.objects.filter(
+            user=request.user, status='Alert', created_at__date__gte=thirty_days_ago
+        ).count()
+        total_mortality_score = MortalityLog.objects.filter(
+            farm=farm, date__gte=thirty_days_ago
+        ).aggregate(total=Sum('count'))['total'] or 0 if farm else 0
+        missed_tasks = max(0, (eligible_tasks.count() * 7) - completed_count)
+        deductions = min(40, alert_count * 5) + min(30, total_mortality_score * 2) + min(20, missed_tasks)
+        flock_health_score = max(0, 100 - deductions)
+
+        return Response({
+            'diagnosis_trend': diagnosis_trend,
+            'disease_breakdown': disease_breakdown,
+            'task_completion_rate': task_completion_rate,
+            'mortality_trend': mortality_data,
+            'vaccination_upcoming': upcoming_vaccinations,
+            'flock_health_score': flock_health_score,
+        })
