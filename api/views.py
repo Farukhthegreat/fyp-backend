@@ -21,6 +21,7 @@ from .serializers import (
 )
 from .ai_engine import predict_disease
 from .notifications import send_fcm_notification
+from firebase_admin import firestore as admin_firestore
 
 
 class HealthView(APIView):
@@ -320,6 +321,19 @@ class ChatMessageListCreateView(APIView):
                 body=message_text[:100],
                 data={'type': 'chat', 'room_id': str(room.id), 'sender_name': sender_name},
             )
+
+        # Write to Firestore for real-time Flutter stream
+        try:
+            db = admin_firestore.client()
+            db.collection('chats').document(str(room_id)).collection('messages').document(str(msg.id)).set({
+                'id': msg.id,
+                'message': msg.message,
+                'sender_name': request.user.first_name or request.user.username or 'User',
+                'is_farmer': (request.user == room.farmer),
+                'created_at': msg.created_at,
+            })
+        except Exception:
+            pass  # Firestore write failure must not break the API
 
         serializer = ChatMessageSerializer(msg)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
