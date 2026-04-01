@@ -165,14 +165,6 @@ USE_TZ = True
 # ---------------------------------------------------------------------------
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-STORAGES = {
-    "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
-    },
-    "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
-    },
-}
 
 # Media files (User uploads)
 MEDIA_URL = '/media/'
@@ -184,6 +176,15 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # In dev, falls back to local filesystem storage
 # ---------------------------------------------------------------------------
 CLOUDINARY_URL = os.getenv('CLOUDINARY_URL')
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+
 if CLOUDINARY_URL:
     CLOUDINARY_STORAGE = {
         'CLOUDINARY_URL': CLOUDINARY_URL,
