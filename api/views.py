@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import status, generics
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from .models import (
     DiagnosisResult, Farm, Supplier, Expert, ChatRoom, ChatMessage,
     DailyTask, TaskCompletion, Article,
@@ -14,7 +14,7 @@ from .models import (
 )
 from .serializers import (
     DiagnosisResultSerializer, UserProfileSerializer,
-    SupplierSerializer, SupplierListSerializer, ExpertSerializer,
+    SupplierSerializer, SupplierListSerializer, ExpertListSerializer, ExpertDetailSerializer,
     ChatRoomSerializer, ChatMessageSerializer,
     DailyTaskSerializer, ArticleListSerializer, ArticleDetailSerializer,
     VaccinationRecordSerializer, MortalityLogSerializer, TreatmentRecordSerializer,
@@ -253,15 +253,21 @@ class SupplierDetailView(generics.RetrieveAPIView):
 
 class ExpertListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
-    serializer_class = ExpertSerializer
+    serializer_class = ExpertListSerializer
     queryset = Expert.objects.filter(is_available=True)
+
+
+class ExpertDetailView(generics.RetrieveAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ExpertDetailSerializer
+    queryset = Expert.objects.all()
 
 
 class ChatRoomListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        rooms = ChatRoom.objects.filter(farmer=request.user)
+        rooms = ChatRoom.objects.filter(Q(farmer=request.user) | Q(expert=request.user))
         serializer = ChatRoomSerializer(rooms, many=True)
         return Response(serializer.data)
 
@@ -284,10 +290,12 @@ class ChatRoomListCreateView(APIView):
 class ChatMessageListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def _get_room_for_user(self, room_id, user):
+        return ChatRoom.objects.filter(id=room_id).filter(Q(farmer=user) | Q(expert=user)).first()
+
     def get(self, request, room_id):
-        try:
-            room = ChatRoom.objects.get(id=room_id, farmer=request.user)
-        except ChatRoom.DoesNotExist:
+        room = self._get_room_for_user(room_id, request.user)
+        if room is None:
             return Response({'error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
 
         # Mark messages from expert as read
@@ -298,9 +306,8 @@ class ChatMessageListCreateView(APIView):
         return Response(serializer.data)
 
     def post(self, request, room_id):
-        try:
-            room = ChatRoom.objects.get(id=room_id, farmer=request.user)
-        except ChatRoom.DoesNotExist:
+        room = self._get_room_for_user(room_id, request.user)
+        if room is None:
             return Response({'error': 'Room not found'}, status=status.HTTP_404_NOT_FOUND)
 
         message_text = request.data.get('message')

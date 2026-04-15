@@ -80,6 +80,16 @@ class SupplierProduct(models.Model):
 class Expert(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='expert_profile')
     specialization = models.CharField(max_length=255)
+    qualification = models.CharField(max_length=255, blank=True, default='')
+    clinic_name = models.CharField(max_length=255, blank=True, default='')
+    city = models.CharField(max_length=120, blank=True, default='')
+    years_experience = models.PositiveIntegerField(default=0)
+    consultation_hours = models.CharField(max_length=255, blank=True, default='')
+    consultation_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    languages = models.CharField(max_length=255, blank=True, default='')
+    about = models.TextField(blank=True, default='')
+    rating = models.DecimalField(max_digits=3, decimal_places=2, default=4.50)
+    total_consultations = models.PositiveIntegerField(default=0)
     phone = models.CharField(max_length=20, blank=True, default='')
     whatsapp = models.CharField(max_length=20, blank=True, default='')
     is_available = models.BooleanField(default=True)
@@ -95,6 +105,7 @@ class Expert(models.Model):
 class ChatRoom(models.Model):
     farmer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='farmer_chat_rooms')
     expert = models.ForeignKey(User, on_delete=models.CASCADE, related_name='expert_chat_rooms')
+    firestore_room_id = models.CharField(max_length=255, blank=True, default='', help_text='Firestore document ID for this room')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

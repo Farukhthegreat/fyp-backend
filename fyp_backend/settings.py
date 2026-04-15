@@ -15,6 +15,7 @@ import os
 import json
 from dotenv import load_dotenv
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 import firebase_admin
 from firebase_admin import credentials
 
@@ -23,6 +24,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load environment variables from .env file (local dev only; cloud uses real env vars)
 load_dotenv(os.path.join(BASE_DIR, '.env'))
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).lower() in ('true', '1', 'yes', 'on')
 
 # ---------------------------------------------------------------------------
 # Firebase Admin SDK Configuration
@@ -52,9 +57,11 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 # Core Django Settings
 # ---------------------------------------------------------------------------
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-dev-only-key-change-in-production')
+DEBUG = env_bool('DEBUG', False)
 
-DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-dev-only-key-change-in-production')
+if (not DEBUG) and (SECRET_KEY.startswith('django-insecure-') or len(SECRET_KEY) < 50):
+    raise ImproperlyConfigured('Set a strong SECRET_KEY when DEBUG=False.')
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 if DEBUG:
@@ -197,8 +204,34 @@ if CLOUDINARY_URL:
 # CORS — allow all origins (Flutter mobile doesn't send Origin, and this is an
 # API-only backend with Firebase token auth — CORS is not a security boundary here)
 # ---------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = env_bool('CORS_ALLOW_ALL_ORIGINS', DEBUG)
 CORS_ALLOW_CREDENTIALS = True
+
+if not CORS_ALLOW_ALL_ORIGINS:
+    CORS_ALLOWED_ORIGINS = [
+        origin.strip()
+        for origin in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
+        if origin.strip()
+    ]
+
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
+    if origin.strip()
+]
+
+
+# ---------------------------------------------------------------------------
+# Production security (especially relevant on Render)
+# ---------------------------------------------------------------------------
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = env_bool('SECURE_SSL_REDIRECT', True)
+    SESSION_COOKIE_SECURE = env_bool('SESSION_COOKIE_SECURE', True)
+    CSRF_COOKIE_SECURE = env_bool('CSRF_COOKIE_SECURE', True)
+    SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '31536000'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', True)
+    SECURE_HSTS_PRELOAD = env_bool('SECURE_HSTS_PRELOAD', True)
 
 
 # ---------------------------------------------------------------------------
