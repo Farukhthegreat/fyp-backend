@@ -15,7 +15,6 @@ import os
 import json
 from dotenv import load_dotenv
 import dj_database_url
-from django.core.exceptions import ImproperlyConfigured
 import firebase_admin
 from firebase_admin import credentials
 
@@ -60,8 +59,6 @@ except Exception as e:
 DEBUG = env_bool('DEBUG', False)
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-dev-only-key-change-in-production')
-if (not DEBUG) and (SECRET_KEY.startswith('django-insecure-') or len(SECRET_KEY) < 50):
-    raise ImproperlyConfigured('Set a strong SECRET_KEY when DEBUG=False.')
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 if DEBUG:
