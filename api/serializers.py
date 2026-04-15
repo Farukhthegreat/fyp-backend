@@ -133,15 +133,38 @@ class SupplierListSerializer(serializers.ModelSerializer):
         ]
 
 
-class ExpertSerializer(serializers.ModelSerializer):
-    name = serializers.CharField(source='user.first_name', read_only=True)
+class ExpertListSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField()
     email = serializers.CharField(source='user.email', read_only=True)
+
+    def get_name(self, obj):
+        full = f"{obj.user.first_name} {obj.user.last_name}".strip()
+        return full or obj.user.username
+
+    class Meta:
+        model = Expert
+        fields = [
+            'id', 'name', 'email', 'specialization', 'city',
+            'years_experience', 'rating',
+        ]
+
+
+class ExpertDetailSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField()
+    email = serializers.CharField(source='user.email', read_only=True)
+
+    def get_name(self, obj):
+        full = f"{obj.user.first_name} {obj.user.last_name}".strip()
+        return full or obj.user.username
 
     class Meta:
         model = Expert
         fields = [
             'id', 'name', 'email', 'specialization', 'phone',
-            'whatsapp', 'is_available',
+            'whatsapp', 'is_available', 'qualification', 'clinic_name',
+            'city', 'years_experience', 'consultation_hours',
+            'consultation_fee', 'languages', 'about', 'rating',
+            'total_consultations',
         ]
 
 

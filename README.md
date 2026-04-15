@@ -23,7 +23,10 @@ venv\Scripts\Activate.ps1
 
 # Install dependencies
 pip install -r requirements.txt
-pip install psycopg2-binary firebase-admin
+
+# Create local env file
+# Windows PowerShell:
+Copy-Item .env.example .env
 
 # Create .env file (copy from .env.example, update config)
 # Set up PostgreSQL database
@@ -37,6 +40,15 @@ python manage.py runserver
 ```
 
 Visit: http://127.0.0.1:8000/api/health/
+
+### Local DB Modes
+
+Use one of these in `.env`:
+
+1. Local PostgreSQL mode (default): set `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`
+2. Render PostgreSQL mode: set `DATABASE_URL` and it will override `DB_*` automatically
+
+This lets you test locally against the same Render Postgres instance when needed.
 
 ---
 

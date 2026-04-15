@@ -3,7 +3,7 @@ from django.urls import path
 from .views import (
     HealthView, DiagnoseView, HistoryView, HistoryDetailView, ProfileView,
     FeedCalculatorView, SupplierListView, SupplierDetailView,
-    ExpertListView, ChatRoomListCreateView, ChatMessageListCreateView,
+    ExpertListView, ExpertDetailView, ChatRoomListCreateView, ChatMessageListCreateView,
     TaskListView, TaskCompleteView, TaskSummaryView,
     ArticleListView, ArticleDetailView,
     VaccinationListCreateView, VaccinationDetailView,
@@ -28,6 +28,7 @@ urlpatterns = [
 
     # Experts & Chat
     path('experts/', ExpertListView.as_view(), name='expert-list'),
+    path('experts/<int:pk>/', ExpertDetailView.as_view(), name='expert-detail'),
     path('chat/rooms/', ChatRoomListCreateView.as_view(), name='chat-rooms'),
     path('chat/rooms/<int:room_id>/messages/', ChatMessageListCreateView.as_view(), name='chat-messages'),
 
