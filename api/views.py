@@ -19,7 +19,7 @@ from .serializers import (
     DailyTaskSerializer, ArticleListSerializer, ArticleDetailSerializer,
     VaccinationRecordSerializer, MortalityLogSerializer, TreatmentRecordSerializer,
 )
-from .ai_engine import predict_disease
+from .ai_engine import predict_disease, fetch_weather
 from .notifications import send_fcm_notification
 from firebase_admin import firestore as admin_firestore
 
@@ -123,7 +123,6 @@ class DiagnoseView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        # Check if image is provided
         if 'image' not in request.FILES:
             return Response(
                 {'error': 'No image provided'},
@@ -132,12 +131,16 @@ class DiagnoseView(APIView):
 
         image_file = request.FILES['image']
 
+        # Fetch weather data using coordinates from the request (optional)
+        lat = request.data.get('latitude')
+        lon = request.data.get('longitude')
+        weather = fetch_weather(lat, lon)
+
         try:
-            prediction = predict_disease(image_file)
+            prediction = predict_disease(image_file, weather=weather)
         except RuntimeError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        # Create DiagnosisResult in the database
         is_healthy = prediction['disease_name'].lower() == 'healthy'
         farm = Farm.objects.filter(user=request.user).first()
         diagnosis = DiagnosisResult.objects.create(
@@ -146,13 +149,16 @@ class DiagnoseView(APIView):
             image=image_file,
             disease_name=prediction['disease_name'],
             confidence=prediction['confidence'],
+            all_probabilities=prediction.get('all_probabilities'),
             source='ai',
             status='Healthy' if is_healthy else 'Alert',
         )
 
-        # Serialize and return the result with request context for full image URL
         serializer = DiagnosisResultSerializer(diagnosis, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        resp_data = serializer.data
+        resp_data['tips'] = prediction.get('tips', [])
+        resp_data['weather'] = weather
+        return Response(resp_data, status=status.HTTP_201_CREATED)
 
 
 class HistoryView(generics.ListCreateAPIView):

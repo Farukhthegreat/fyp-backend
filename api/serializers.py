@@ -74,6 +74,7 @@ class DiagnosisResultSerializer(serializers.ModelSerializer):
             'image_url',
             'disease_name',
             'confidence',
+            'all_probabilities',
             'source',
             'status',
             'description',
