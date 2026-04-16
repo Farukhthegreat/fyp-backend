@@ -83,7 +83,6 @@ class MarketRate:
     broiler_live_wholesale: int  # PKR per kg live (Thok)
     broiler_farm_gate: int       # PKR per kg live (Farm Gate)
     broiler_meat_per_kg: int     # PKR per kg meat
-    doc_price: int               # PKR per day-old chick (fallback estimate)
     feed_starter_per_bag: int    # PKR per 50 kg bag (estimate)
     feed_grower_per_bag: int
     feed_finisher_per_bag: int
@@ -383,7 +382,6 @@ def mock_rate(today: str) -> MarketRate:
         broiler_live_wholesale=thok,
         broiler_farm_gate=farm_gate,
         broiler_meat_per_kg=meat,
-        doc_price=110 + rnd.randint(-10, 20),
         feed_starter_per_bag=9800 + rnd.randint(-150, 200),
         feed_grower_per_bag=9500 + rnd.randint(-150, 200),
         feed_finisher_per_bag=9200 + rnd.randint(-150, 200),
@@ -426,7 +424,6 @@ def load_admin_override(today: str) -> Optional[MarketRate]:
         broiler_live_wholesale=int(row.broiler_live_per_kg * 0.96),
         broiler_farm_gate=int(row.broiler_live_per_kg * 0.92),
         broiler_meat_per_kg=int(row.broiler_live_per_kg * 1.50),
-        doc_price=int(row.doc_price or 110),
         feed_starter_per_bag=int(row.feed_starter_per_bag or 9800),
         feed_grower_per_bag=int(row.feed_grower_per_bag or 9500),
         feed_finisher_per_bag=int(row.feed_finisher_per_bag or 9200),
@@ -468,7 +465,6 @@ def compose(today: str, use_ocr: bool, use_agbro: bool) -> MarketRate:
                 broiler_live_wholesale=thok,
                 broiler_farm_gate=fg,
                 broiler_meat_per_kg=meat,
-                doc_price=mock.doc_price,  # Punjab page doesn't publish DOC
                 feed_starter_per_bag=mock.feed_starter_per_bag,
                 feed_grower_per_bag=mock.feed_grower_per_bag,
                 feed_finisher_per_bag=mock.feed_finisher_per_bag,
@@ -497,7 +493,6 @@ def compose(today: str, use_ocr: bool, use_agbro: bool) -> MarketRate:
                 broiler_live_wholesale=int(live * 0.96),
                 broiler_farm_gate=int(live * 0.92),
                 broiler_meat_per_kg=int(live * 1.50),
-                doc_price=int(agb['doc']) if agb.get('doc') else mock.doc_price,
                 feed_starter_per_bag=mock.feed_starter_per_bag,
                 feed_grower_per_bag=mock.feed_grower_per_bag,
                 feed_finisher_per_bag=mock.feed_finisher_per_bag,

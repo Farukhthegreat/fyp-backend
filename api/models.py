@@ -262,7 +262,6 @@ class MarketRateOverride(models.Model):
     date = models.CharField(max_length=10, db_index=True, help_text='YYYY-MM-DD')
     egg_tray_price = models.PositiveIntegerField(help_text='PKR per 30 eggs')
     broiler_live_per_kg = models.PositiveIntegerField(help_text='PKR per kg live')
-    doc_price = models.PositiveIntegerField(null=True, blank=True, help_text='PKR per day-old chick')
     feed_starter_per_bag = models.PositiveIntegerField(null=True, blank=True, help_text='PKR per 50 kg bag')
     feed_grower_per_bag = models.PositiveIntegerField(null=True, blank=True)
     feed_finisher_per_bag = models.PositiveIntegerField(null=True, blank=True)

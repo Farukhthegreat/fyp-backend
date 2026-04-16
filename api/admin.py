@@ -77,7 +77,7 @@ class ArticleAdmin(admin.ModelAdmin):
 class MarketRateOverrideAdmin(admin.ModelAdmin):
     list_display = [
         'date', 'region_key', 'egg_tray_price', 'egg_peti_display',
-        'broiler_live_per_kg', 'doc_price', 'active', 'updated_at',
+        'broiler_live_per_kg', 'active', 'updated_at',
     ]
     list_filter = ['region_key', 'active', 'date']
     search_fields = ['region_key', 'date', 'note']
@@ -94,8 +94,8 @@ class MarketRateOverrideAdmin(admin.ModelAdmin):
             'description': '1 tray = 30 eggs · 1 peti = 12 trays = 360 eggs. '
                            'Peti price is computed as tray × 12 automatically.',
         }),
-        ('Broiler & DOC', {
-            'fields': ('broiler_live_per_kg', 'doc_price'),
+        ('Broiler', {
+            'fields': ('broiler_live_per_kg',),
         }),
         ('Feed (50 kg bag, optional)', {
             'fields': ('feed_starter_per_bag', 'feed_grower_per_bag', 'feed_finisher_per_bag'),
@@ -120,6 +120,18 @@ class MarketRateOverrideAdmin(admin.ModelAdmin):
             messages.success(request, f'Pushed {obj.region_key} {obj.date} to Firestore.')
         else:
             messages.warning(request, f'Saved locally. Firestore push failed or disabled — run fetch_market_rates to sync.')
+
+    def delete_model(self, request, obj):
+        # Delete the mirrored Firestore docs first so the app stops showing
+        # the rate. Keep it before the DB delete so if this fails, we can
+        # still see the override row and retry.
+        _delete_override_from_firestore(obj)
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        for obj in queryset:
+            _delete_override_from_firestore(obj)
+        super().delete_queryset(request, queryset)
 
     @admin.action(description='Push selected rates to Firestore now')
     def push_to_firestore(self, request, queryset):
@@ -158,7 +170,6 @@ def _sync_override_to_firestore(obj: 'MarketRateOverride') -> bool:
             'broiler_live_wholesale': int(live * 0.96),
             'broiler_farm_gate': int(live * 0.92),
             'broiler_meat_per_kg': int(live * 1.50),
-            'doc_price': int(obj.doc_price or 110),
             'feed_starter_per_bag': int(obj.feed_starter_per_bag or 9800),
             'feed_grower_per_bag': int(obj.feed_grower_per_bag or 9500),
             'feed_finisher_per_bag': int(obj.feed_finisher_per_bag or 9200),
@@ -179,5 +190,29 @@ def _sync_override_to_firestore(obj: 'MarketRateOverride') -> bool:
     except Exception as e:  # pragma: no cover
         import logging
         logging.getLogger(__name__).warning('Firestore sync failed: %s', e)
+        return False
+
+
+def _delete_override_from_firestore(obj: 'MarketRateOverride') -> bool:
+    """Remove the mirrored Firestore docs when an admin override is deleted."""
+    try:
+        from django.conf import settings
+        from firebase_admin import firestore as admin_firestore
+        if not getattr(settings, 'FIREBASE_INITIALIZED', False):
+            return False
+        db = admin_firestore.client()
+        doc_id = f'{obj.date}_{obj.region_key}'
+        # Remove the historical entry outright.
+        db.collection('market_rates').document(doc_id).delete()
+        # Clear `market_rates_latest/<region>` only if it was pointing at the
+        # row we're deleting — otherwise a newer scrape might be in there.
+        latest_ref = db.collection('market_rates_latest').document(obj.region_key)
+        snap = latest_ref.get()
+        if snap.exists and snap.to_dict().get('date') == obj.date:
+            latest_ref.delete()
+        return True
+    except Exception as e:  # pragma: no cover
+        import logging
+        logging.getLogger(__name__).warning('Firestore delete failed: %s', e)
         return False
 
