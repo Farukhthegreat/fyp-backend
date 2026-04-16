@@ -676,3 +676,65 @@ class AnalyticsView(APIView):
             'vaccination_upcoming': upcoming_vaccinations,
             'flock_health_score': flock_health_score,
         })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Market Rates (Daily Egg Peti / Broiler / Feed)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MarketRatesView(APIView):
+    """GET /api/market-rates/ → latest rate for every region.
+
+    Reads from Firestore `market_rates_latest/*`. Falls back to returning an
+    empty list if Firestore is unavailable (the app should use its cached
+    Firestore snapshot).
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        try:
+            from firebase_admin import firestore as admin_firestore
+            from django.conf import settings
+            if not getattr(settings, 'FIREBASE_INITIALIZED', False):
+                return Response({'rates': [], 'source': 'unavailable'})
+            db = admin_firestore.client()
+            docs = db.collection('market_rates_latest').stream()
+            payload = []
+            for d in docs:
+                item = d.to_dict()
+                # updated_at is a Firestore timestamp; stringify for JSON.
+                if 'updated_at' in item and hasattr(item['updated_at'], 'isoformat'):
+                    item['updated_at'] = item['updated_at'].isoformat()
+                payload.append(item)
+            payload.sort(key=lambda x: x.get('region_key', ''))
+            return Response({'rates': payload, 'source': 'firestore'})
+        except Exception as e:
+            return Response({'rates': [], 'source': 'error', 'detail': str(e)}, status=200)
+
+
+class MarketRatesRegionView(APIView):
+    """GET /api/market-rates/<region_key>/ → today + 30-day history for a region."""
+    permission_classes = [AllowAny]
+
+    def get(self, request, region_key: str):
+        try:
+            from firebase_admin import firestore as admin_firestore
+            from django.conf import settings
+            if not getattr(settings, 'FIREBASE_INITIALIZED', False):
+                return Response({'history': []})
+            db = admin_firestore.client()
+            q = (
+                db.collection('market_rates')
+                .where('region_key', '==', region_key)
+                .order_by('date', direction=admin_firestore.Query.DESCENDING)
+                .limit(30)
+            )
+            rows = []
+            for d in q.stream():
+                item = d.to_dict()
+                if 'updated_at' in item and hasattr(item['updated_at'], 'isoformat'):
+                    item['updated_at'] = item['updated_at'].isoformat()
+                rows.append(item)
+            return Response({'region_key': region_key, 'history': rows})
+        except Exception as e:
+            return Response({'history': [], 'detail': str(e)}, status=200)

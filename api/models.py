@@ -243,3 +243,46 @@ class TreatmentRecord(models.Model):
     class Meta:
         ordering = ['-start_date']
 
+
+class MarketRateOverride(models.Model):
+    """
+    Admin-entered daily poultry rates. Takes priority over scraped AGBRO data.
+    One row per (region_key, date). Set `active=False` to disable without delete.
+
+    Peti logic: 1 tray = 30 eggs, 1 peti = 12 trays = 360 eggs.
+    egg_peti_price is computed as egg_tray_price * 12 when writing to Firestore.
+    """
+    REGION_CHOICES = [
+        ('lahore',     'Lahore'),
+        ('karachi',    'Karachi'),
+        ('islamabad',  'Islamabad'),
+        ('rawalpindi', 'Rawalpindi'),
+        ('faisalabad', 'Faisalabad'),
+        ('multan',     'Multan'),
+        ('peshawar',   'Peshawar'),
+        ('quetta',     'Quetta'),
+    ]
+
+    region_key = models.CharField(max_length=32, choices=REGION_CHOICES, db_index=True)
+    date = models.CharField(max_length=10, db_index=True, help_text='YYYY-MM-DD')
+    egg_tray_price = models.PositiveIntegerField(help_text='PKR per 30 eggs')
+    broiler_live_per_kg = models.PositiveIntegerField(help_text='PKR per kg live')
+    doc_price = models.PositiveIntegerField(null=True, blank=True, help_text='PKR per day-old chick')
+    feed_starter_per_bag = models.PositiveIntegerField(null=True, blank=True, help_text='PKR per 50 kg bag')
+    feed_grower_per_bag = models.PositiveIntegerField(null=True, blank=True)
+    feed_finisher_per_bag = models.PositiveIntegerField(null=True, blank=True)
+    note = models.CharField(max_length=255, blank=True, default='')
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-date', 'region_key']
+        unique_together = [('region_key', 'date')]
+
+    def __str__(self):
+        return f"{self.region_key} {self.date} — tray PKR {self.egg_tray_price}"
+
+    @property
+    def egg_peti_price(self) -> int:
+        return int(self.egg_tray_price) * 12

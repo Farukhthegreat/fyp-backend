@@ -10,6 +10,7 @@ from .views import (
     MortalityListCreateView, MortalityDetailView,
     TreatmentListCreateView, TreatmentDetailView,
     FlockSummaryView, AnalyticsView,
+    MarketRatesView, MarketRatesRegionView,
 )
 
 urlpatterns = [
@@ -52,4 +53,9 @@ urlpatterns = [
 
     # Analytics
     path('analytics/', AnalyticsView.as_view(), name='analytics'),
+
+    # Market Rates (daily egg peti / broiler / feed). Primary path is Firestore,
+    # this REST endpoint is a fallback for offline Firestore clients + web.
+    path('market-rates/', MarketRatesView.as_view(), name='market-rates'),
+    path('market-rates/<str:region_key>/', MarketRatesRegionView.as_view(), name='market-rates-region'),
 ]
