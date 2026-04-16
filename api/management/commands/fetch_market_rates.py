@@ -162,54 +162,91 @@ def _num(cell: str) -> Optional[float]:
         return None
 
 
+_DATE_RE = re.compile(r'^(\d{1,2})-([A-Za-z]{3})-(\d{2})$')
+_MONTHS = {
+    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+}
+
+
+def _parse_agbro_date(s: str) -> Optional[dt.date]:
+    m = _DATE_RE.match(s or '')
+    if not m:
+        return None
+    day = int(m.group(1))
+    month = _MONTHS.get(m.group(2).lower())
+    year = 2000 + int(m.group(3))
+    if not month:
+        return None
+    try:
+        return dt.date(year, month, day)
+    except ValueError:
+        return None
+
+
 def fetch_agbro_latest() -> Optional[dict]:
     """Return dict keyed by AGBRO city name, plus 'egg_peti' PKR and 'row_date'.
 
-    {
-      'row_date': '9-Apr-26',
-      'egg_peti': 10140,
-      'Rawalpindi': {'doc': 110.5, 'farm': 395, 'open': 410, 'close': 415},
-      'Lahore':     {...},
-      ...
-    }
-
-    Returns None on any failure (layout change, network, parse error).
+    AGBRO renders the year as multiple monthly tables (Jan, Feb, Mar, Apr ...)
+    on the same page. Earlier versions of this scraper only read the *first*
+    table and therefore returned January data year-round. We now iterate every
+    tableizer-table on the page, parse every date cell, and pick the row with
+    the latest real calendar date.
     """
     try:
-        resp = requests.get(AGBRO_URL, timeout=10, headers={'User-Agent': USER_AGENT})
-        if resp.status_code != 200:
+        # 2026 yearly archive page is the canonical source; homepage is fine
+        # too because it redirects to the same content.
+        candidates = [
+            'https://www.agbro.com/broiler-market-prices-2026/',
+            AGBRO_URL,
+        ]
+        html = None
+        for url in candidates:
+            try:
+                r = requests.get(url, timeout=10, headers={'User-Agent': USER_AGENT})
+                if r.status_code == 200 and 'tableizer-table' in r.text:
+                    html = r.text
+                    break
+            except Exception:
+                continue
+        if not html:
             return None
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        table = soup.find('table', class_='tableizer-table')
-        if not table:
+        soup = BeautifulSoup(html, 'html.parser')
+        tables = soup.find_all('table', class_='tableizer-table')
+        if not tables:
             return None
-        rows = table.find_all('tr')
 
-        # Find the last row whose first cell matches DD-Mon-YY (has data).
-        date_re = re.compile(r'^\d{1,2}-[A-Za-z]{3}-\d{2}$')
-        latest = None
-        for r in reversed(rows):
-            cells = [c.get_text(strip=True) for c in r.find_all(['td', 'th'])]
-            if cells and date_re.match(cells[0]):
-                latest = cells
-                break
-        if not latest or len(latest) < 16:
+        latest_row = None
+        latest_date: Optional[dt.date] = None
+        for table in tables:
+            for r in table.find_all('tr'):
+                cells = [c.get_text(strip=True) for c in r.find_all(['td', 'th'])]
+                if not cells:
+                    continue
+                parsed = _parse_agbro_date(cells[0])
+                if not parsed:
+                    continue
+                if latest_date is None or parsed > latest_date:
+                    latest_date = parsed
+                    latest_row = cells
+
+        if not latest_row or len(latest_row) < 16:
             return None
 
-        out: dict = {'row_date': latest[0]}
+        out: dict = {'row_date': latest_row[0]}
         for city, idx in AGBRO_COL_MAP.items():
             payload = {}
             for metric, i in idx.items():
-                if i < len(latest):
-                    v = _num(latest[i])
+                if i < len(latest_row):
+                    v = _num(latest_row[i])
                     if v is not None:
                         payload[metric] = v
             if payload:
                 out[city] = payload
 
-        if len(latest) > AGBRO_EGG_PETI_IDX:
-            peti = _num(latest[AGBRO_EGG_PETI_IDX])
-            if peti and peti > 1000:  # sanity: peti is thousands of PKR
+        if len(latest_row) > AGBRO_EGG_PETI_IDX:
+            peti = _num(latest_row[AGBRO_EGG_PETI_IDX])
+            if peti and peti > 1000:  # peti price in thousands of PKR
                 out['egg_peti'] = int(peti)
 
         return out if len(out) > 1 else None
