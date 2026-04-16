@@ -140,26 +140,31 @@ def _sync_override_to_firestore(obj: 'MarketRateOverride') -> bool:
         if not getattr(settings, 'FIREBASE_INITIALIZED', False):
             return False
         from api.management.commands.fetch_market_rates import (
-            REGIONS, TRAYS_PER_PETI, EGGS_PER_PETI, EGGS_PER_TRAY,
+            REGION, TRAYS_PER_PETI, EGGS_PER_PETI, EGGS_PER_TRAY,
         )
-        region_meta = next((r for r in REGIONS if r['key'] == obj.region_key), None)
-        if not region_meta:
+        if obj.region_key != REGION['key']:
             return False
         tray = int(obj.egg_tray_price)
+        live = int(obj.broiler_live_per_kg)
         payload = {
             'date': obj.date,
-            'region': region_meta['name'],
-            'region_key': obj.region_key,
-            'province': region_meta['province'],
+            'region': REGION['name'],
+            'region_key': REGION['key'],
+            'province': REGION['province'],
             'egg_tray_price': tray,
             'egg_peti_price': tray * TRAYS_PER_PETI,
-            'broiler_live_per_kg': int(obj.broiler_live_per_kg),
-            'broiler_meat_per_kg': int(obj.broiler_live_per_kg * 1.52),
-            'doc_price': int(obj.doc_price or 70),
+            'egg_dozen_price': int(tray / 2.5),
+            'broiler_live_per_kg': live,
+            'broiler_live_wholesale': int(live * 0.96),
+            'broiler_farm_gate': int(live * 0.92),
+            'broiler_meat_per_kg': int(live * 1.50),
+            'doc_price': int(obj.doc_price or 110),
             'feed_starter_per_bag': int(obj.feed_starter_per_bag or 9800),
             'feed_grower_per_bag': int(obj.feed_grower_per_bag or 9500),
             'feed_finisher_per_bag': int(obj.feed_finisher_per_bag or 9200),
             'source': 'admin',
+            'source_date': obj.date,
+            'image_url': '',
             'scraped': True,
             'eggs_per_peti': EGGS_PER_PETI,
             'trays_per_peti': TRAYS_PER_PETI,
