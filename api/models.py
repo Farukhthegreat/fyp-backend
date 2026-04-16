@@ -253,17 +253,12 @@ class MarketRateOverride(models.Model):
     egg_peti_price is computed as egg_tray_price * 12 when writing to Firestore.
     """
     REGION_CHOICES = [
-        ('lahore',     'Lahore'),
-        ('karachi',    'Karachi'),
-        ('islamabad',  'Islamabad'),
-        ('rawalpindi', 'Rawalpindi'),
-        ('faisalabad', 'Faisalabad'),
-        ('multan',     'Multan'),
-        ('peshawar',   'Peshawar'),
-        ('quetta',     'Quetta'),
+        ('punjab', 'Punjab (Market Committee official rate)'),
     ]
 
-    region_key = models.CharField(max_length=32, choices=REGION_CHOICES, db_index=True)
+    region_key = models.CharField(
+        max_length=32, choices=REGION_CHOICES, default='punjab', db_index=True,
+    )
     date = models.CharField(max_length=10, db_index=True, help_text='YYYY-MM-DD')
     egg_tray_price = models.PositiveIntegerField(help_text='PKR per 30 eggs')
     broiler_live_per_kg = models.PositiveIntegerField(help_text='PKR per kg live')
