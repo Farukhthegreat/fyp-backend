@@ -141,6 +141,31 @@ class DiagnoseView(APIView):
         except RuntimeError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
+        # If the HF Space rejected the sample (not-feces or low confidence)
+        # we return the payload *without* saving a DiagnosisResult — a
+        # rejected photo is a UX signal, not a real diagnosis, and would
+        # otherwise pollute the farmer's history as a false-positive alert.
+        if prediction.get('rejected') is True:
+            resp_data = {
+                'rejected': True,
+                'gate_failed': prediction.get('gate_failed'),
+                'reason': prediction.get('reason'),
+                'disease_name': prediction.get('disease_name', 'Rejected'),
+                'confidence': prediction.get('confidence', 0.0),
+                'all_probabilities': prediction.get('all_probabilities', {}),
+                'image_stage_probabilities': prediction.get('image_stage_probabilities', {}),
+                'image_stage_top_class': prediction.get('image_stage_top_class'),
+                'image_stage_top_confidence': prediction.get('image_stage_top_confidence'),
+                'yolo_detected': prediction.get('yolo_detected', False),
+                'yolo_confidence': prediction.get('yolo_confidence', 0.0),
+                'crop_preview_data_url': prediction.get('crop_preview_data_url'),
+                'xai': prediction.get('xai'),
+                'tips': prediction.get('tips', []),
+                'pipeline': prediction.get('pipeline'),
+                'weather': weather,
+            }
+            return Response(resp_data, status=status.HTTP_200_OK)
+
         is_healthy = prediction['disease_name'].lower() == 'healthy'
         farm = Farm.objects.filter(user=request.user).first()
         diagnosis = DiagnosisResult.objects.create(
@@ -158,6 +183,15 @@ class DiagnoseView(APIView):
         resp_data = serializer.data
         resp_data['tips'] = prediction.get('tips', [])
         resp_data['weather'] = weather
+        # Pass through the rich metadata from the HF Space so the Flutter
+        # client can render XAI overlays, YOLO crop previews, etc.
+        for extra in (
+            'image_stage_probabilities', 'image_stage_top_class',
+            'image_stage_top_confidence', 'yolo_detected', 'yolo_confidence',
+            'crop_preview_data_url', 'xai', 'pipeline', 'accepted', 'rejected',
+        ):
+            if extra in prediction:
+                resp_data[extra] = prediction[extra]
         return Response(resp_data, status=status.HTTP_201_CREATED)
 
 
