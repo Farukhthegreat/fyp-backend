@@ -6,8 +6,7 @@ python manage.py collectstatic --no-input
 python manage.py migrate
 python manage.py seed_data
 
-# Fetch today's Punjab Market Committee poultry rates.
-# Runs on every deploy, including the daily GitHub-Actions → Render deploy-hook
-# ping. Uses `|| true` so a transient scrape failure (OCR.space rate limit,
-# Punjab site down, etc.) never blocks the web deploy itself.
-python manage.py fetch_market_rates || true
+# Daily market-rate scraping is now handled by the separate Render Cron
+# Job service (aviansense-scraper) on a $1/mo Starter plan. Keeping it
+# out of the web deploy avoids slowing down restarts and prevents a
+# broken scrape from stalling unrelated code pushes.
