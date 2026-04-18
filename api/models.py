@@ -35,6 +35,7 @@ class DiagnosisResult(models.Model):
     description = models.TextField(blank=True, default='')
     notes = models.TextField(blank=True, default='')
     all_probabilities = models.JSONField(null=True, blank=True)
+    analysis_payload = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

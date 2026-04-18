@@ -13,7 +13,7 @@ from .models import (
     VaccinationRecord, MortalityLog, TreatmentRecord,
 )
 from .serializers import (
-    DiagnosisResultSerializer, UserProfileSerializer,
+    DiagnosisResultSerializer, DiagnosisResultDetailSerializer, UserProfileSerializer,
     SupplierSerializer, SupplierListSerializer, ExpertListSerializer, ExpertDetailSerializer,
     ChatRoomSerializer, ChatMessageSerializer,
     DailyTaskSerializer, ArticleListSerializer, ArticleDetailSerializer,
@@ -184,6 +184,27 @@ class DiagnoseView(APIView):
                 image_file.seek(0)
             except Exception:
                 pass
+            analysis_payload = {
+                key: prediction[key]
+                for key in (
+                    'image_stage_probabilities',
+                    'image_stage_top_class',
+                    'image_stage_top_confidence',
+                    'yolo_detected',
+                    'yolo_confidence',
+                    'crop_preview_data_url',
+                    'xai',
+                    'pipeline',
+                    'accepted',
+                    'rejected',
+                    'weather',
+                    'tips',
+                )
+                if key in prediction
+            }
+            if weather:
+                analysis_payload['weather'] = weather
+
             diagnosis = DiagnosisResult.objects.create(
                 user=request.user,
                 farm=farm,
@@ -191,6 +212,7 @@ class DiagnoseView(APIView):
                 disease_name=prediction['disease_name'],
                 confidence=prediction['confidence'],
                 all_probabilities=prediction.get('all_probabilities'),
+                analysis_payload=analysis_payload or None,
                 source='ai',
                 status='Healthy' if is_healthy else 'Alert',
             )
@@ -247,14 +269,18 @@ class HistoryView(generics.ListCreateAPIView):
         serializer.save(user=self.request.user, farm=farm)
 
 
-class HistoryDetailView(generics.DestroyAPIView):
+class HistoryDetailView(generics.RetrieveDestroyAPIView):
     """
     DELETE endpoint to remove a single diagnosis record by its ID.
     Only the record owner can delete it.
     Requires authentication.
     """
-    serializer_class = DiagnosisResultSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.request.method == 'GET':
+            return DiagnosisResultDetailSerializer
+        return DiagnosisResultSerializer
 
     def get_queryset(self):
         return DiagnosisResult.objects.filter(user=self.request.user)

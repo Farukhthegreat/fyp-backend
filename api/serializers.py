@@ -121,6 +121,33 @@ class DiagnosisResultSerializer(serializers.ModelSerializer):
         return farm.name if farm else 'My Farm'
 
 
+class DiagnosisResultDetailSerializer(DiagnosisResultSerializer):
+    class Meta(DiagnosisResultSerializer.Meta):
+        fields = DiagnosisResultSerializer.Meta.fields + ['analysis_payload']
+
+    def to_representation(self, obj):
+        data = super().to_representation(obj)
+        payload = data.pop('analysis_payload', None) or {}
+        if isinstance(payload, dict):
+            for key in (
+                'image_stage_probabilities',
+                'image_stage_top_class',
+                'image_stage_top_confidence',
+                'yolo_detected',
+                'yolo_confidence',
+                'crop_preview_data_url',
+                'xai',
+                'pipeline',
+                'accepted',
+                'rejected',
+                'weather',
+                'tips',
+            ):
+                if key in payload:
+                    data[key] = payload[key]
+        return data
+
+
 class SupplierProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = SupplierProduct
