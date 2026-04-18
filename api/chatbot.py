@@ -6,12 +6,17 @@ and returns a veterinarian-style reply. Keeps the API key server-side,
 injects per-user context (latest diagnosis + farm) into the system prompt,
 and hard-caps history length so a single misuser can't blow the token
 budget.
+
+Uses the `google-genai` SDK (successor to `google-generativeai`). The older
+SDK pins an incompatible protobuf range that collides with Firebase Admin's
+grpcio-status on Render.
 """
 
 import logging
 import os
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -23,25 +28,24 @@ logger = logging.getLogger(__name__)
 
 # Configured lazily so a missing key doesn't crash import at boot — the
 # endpoint returns a 503 with a clear message instead.
-_GENAI_READY = False
-_GENAI_ERROR = None
+_CLIENT: genai.Client | None = None
+_GENAI_ERROR: str | None = None
 
 
-def _ensure_genai_configured():
-    global _GENAI_READY, _GENAI_ERROR
-    if _GENAI_READY:
+def _ensure_client() -> bool:
+    global _CLIENT, _GENAI_ERROR
+    if _CLIENT is not None:
         return True
     api_key = os.environ.get('GEMINI_API_KEY', '').strip()
     if not api_key:
         _GENAI_ERROR = 'GEMINI_API_KEY is not configured'
         return False
     try:
-        genai.configure(api_key=api_key)
-        _GENAI_READY = True
+        _CLIENT = genai.Client(api_key=api_key)
         return True
     except Exception as e:  # noqa: BLE001
-        _GENAI_ERROR = f'Gemini configure failed: {e}'
-        logger.exception('Gemini configure failed')
+        _GENAI_ERROR = f'Gemini client init failed: {e}'
+        logger.exception('Gemini client init failed')
         return False
 
 
@@ -59,7 +63,7 @@ def _build_system_prompt(farm_name: str, last_diagnosis: dict | None) -> str:
     answers feel personalised. Bilingual instruction lets the farmer write
     Urdu or English without a mode switch.
     """
-    context_lines = [
+    lines = [
         "You are AvianVet, an expert poultry veterinarian assisting a farmer in Pakistan.",
         "",
         "RULES:",
@@ -73,28 +77,28 @@ def _build_system_prompt(farm_name: str, last_diagnosis: dict | None) -> str:
         "- Format answers in short paragraphs or bullet lists — never walls of text.",
     ]
     if farm_name:
-        context_lines.append(f"\nFARMER CONTEXT:\n- Farm name: {farm_name}")
+        lines.append(f"\nFARMER CONTEXT:\n- Farm name: {farm_name}")
     if last_diagnosis:
         disease = last_diagnosis.get('disease_name') or 'Unknown'
         confidence = last_diagnosis.get('confidence') or 0
-        context_lines.append(
+        lines.append(
             f"- Most recent diagnosis: {disease} (confidence {round(float(confidence), 1)}%)"
         )
-        context_lines.append(
+        lines.append(
             "  If the farmer asks about their latest result, refer to this diagnosis."
         )
-    return '\n'.join(context_lines)
+    return '\n'.join(lines)
 
 
-def _sanitize_history(raw_history):
+def _history_to_contents(raw_history):
     """
-    Accept the client-provided history as a list of {role, text} dicts and
-    drop anything malformed. Trim to the last MAX_HISTORY_TURNS so we never
-    feed the model unbounded context. Gemini expects roles 'user' / 'model'.
+    Convert the client-provided history (list of {role, text}) into the
+    typed `Content` objects the new SDK expects. Drops malformed entries
+    and truncates to the last MAX_HISTORY_TURNS turns.
     """
     if not isinstance(raw_history, list):
         return []
-    cleaned = []
+    contents = []
     for entry in raw_history[-MAX_HISTORY_TURNS:]:
         if not isinstance(entry, dict):
             continue
@@ -104,11 +108,13 @@ def _sanitize_history(raw_history):
             continue
         if not isinstance(text, str) or not text.strip():
             continue
-        cleaned.append({
-            'role': role,
-            'parts': [text[:MAX_MESSAGE_CHARS]],
-        })
-    return cleaned
+        contents.append(
+            genai_types.Content(
+                role=role,
+                parts=[genai_types.Part.from_text(text=text[:MAX_MESSAGE_CHARS])],
+            )
+        )
+    return contents
 
 
 class ChatbotView(APIView):
@@ -132,7 +138,7 @@ class ChatbotView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        if not _ensure_genai_configured():
+        if not _ensure_client():
             logger.error('Gemini not configured: %s', _GENAI_ERROR)
             return Response(
                 {'error': 'assistant_unavailable'},
@@ -147,8 +153,6 @@ class ChatbotView(APIView):
             )
         if len(message) > MAX_MESSAGE_CHARS:
             message = message[:MAX_MESSAGE_CHARS]
-
-        history = _sanitize_history(request.data.get('history'))
 
         # Pull personalisation context. Swallow failures so a missing farm
         # record never blocks the assistant — the model just answers without
@@ -178,22 +182,30 @@ class ChatbotView(APIView):
 
         system_prompt = _build_system_prompt(farm_name, last_diagnosis)
 
-        try:
-            # gemini-2.5-flash gives us the best free-tier quota (1500 req/day,
-            # 1M tokens/min) with genuinely strong Urdu support. flash-lite is
-            # faster but weaker at Urdu; pro is overkill and counted against a
-            # much lower RPD cap.
-            model = genai.GenerativeModel(
-                model_name='gemini-2.5-flash',
-                system_instruction=system_prompt,
-                generation_config={
-                    'temperature': 0.7,
-                    'top_p': 0.9,
-                    'max_output_tokens': 512,
-                },
+        # Build the full conversation turn list: prior history plus the new
+        # user message tacked on at the end.
+        contents = _history_to_contents(request.data.get('history'))
+        contents.append(
+            genai_types.Content(
+                role='user',
+                parts=[genai_types.Part.from_text(text=message)],
             )
-            chat = model.start_chat(history=history)
-            response = chat.send_message(message)
+        )
+
+        try:
+            # gemini-2.5-flash has the best free-tier RPD (1500/day) and
+            # strong Urdu support. flash-lite is faster but weaker; pro is
+            # overkill and counted against a much lower daily cap.
+            response = _CLIENT.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=contents,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.7,
+                    top_p=0.9,
+                    max_output_tokens=512,
+                ),
+            )
             reply = (getattr(response, 'text', None) or '').strip()
             if not reply:
                 return Response(
@@ -202,9 +214,9 @@ class ChatbotView(APIView):
                 )
             return Response({'reply': reply})
         except Exception as e:  # noqa: BLE001
-            # Specific retryable patterns bubble up as 429/quota. Map into a
-            # 502 so the client retry path kicks in rather than showing a
-            # generic server error.
+            # Upstream retryable errors (quota, transient) bubble up as 429
+            # or similar. Map to 502 so the Flutter retry path engages
+            # instead of showing a generic server error.
             logger.exception('Gemini call failed')
             return Response(
                 {'error': 'upstream_error', 'detail': str(e)[:200]},
