@@ -217,11 +217,17 @@ class ChatbotView(APIView):
                 )
             return Response({'reply': reply})
         except Exception as e:  # noqa: BLE001
-            # Upstream retryable errors (quota, transient) bubble up as 429
-            # or similar. Map to 502 so the Flutter retry path engages
-            # instead of showing a generic server error.
+            # Upstream retryable errors (quota, transient, bad key) bubble
+            # up as 429 / 403 / etc. Map to 502 so the Flutter retry path
+            # engages instead of showing a generic server error. Surface
+            # the exception class + message so operators can diagnose
+            # key/quota issues from the client without tailing logs.
             logger.exception('Gemini call failed')
             return Response(
-                {'error': 'upstream_error', 'detail': str(e)[:200]},
+                {
+                    'error': 'upstream_error',
+                    'error_type': type(e).__name__,
+                    'detail': str(e)[:400],
+                },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
