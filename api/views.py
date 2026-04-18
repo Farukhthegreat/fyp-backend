@@ -123,6 +123,9 @@ class DiagnoseView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        import logging, traceback
+        logger = logging.getLogger(__name__)
+
         if 'image' not in request.FILES:
             return Response(
                 {'error': 'No image provided'},
@@ -139,7 +142,12 @@ class DiagnoseView(APIView):
         try:
             prediction = predict_disease(image_file, weather=weather)
         except RuntimeError as exc:
+            logger.warning('predict_disease RuntimeError: %s', exc)
             return Response({'error': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as exc:
+            logger.error('predict_disease unexpected error:\n%s', traceback.format_exc())
+            return Response({'error': f'Inference failed: {exc}'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # If the HF Space rejected the sample (not-feces or low confidence)
         # we return the payload *without* saving a DiagnosisResult — a
@@ -166,33 +174,47 @@ class DiagnoseView(APIView):
             }
             return Response(resp_data, status=status.HTTP_200_OK)
 
-        is_healthy = prediction['disease_name'].lower() == 'healthy'
-        farm = Farm.objects.filter(user=request.user).first()
-        diagnosis = DiagnosisResult.objects.create(
-            user=request.user,
-            farm=farm,
-            image=image_file,
-            disease_name=prediction['disease_name'],
-            confidence=prediction['confidence'],
-            all_probabilities=prediction.get('all_probabilities'),
-            source='ai',
-            status='Healthy' if is_healthy else 'Alert',
-        )
+        try:
+            is_healthy = prediction['disease_name'].lower() == 'healthy'
+            farm = Farm.objects.filter(user=request.user).first()
+            # ai_engine already rewinds, but be defensive — Django's storage
+            # backend saves from the current cursor, and an EOF'd file would
+            # persist empty bytes and later surface as "image cannot be opened".
+            try:
+                image_file.seek(0)
+            except Exception:
+                pass
+            diagnosis = DiagnosisResult.objects.create(
+                user=request.user,
+                farm=farm,
+                image=image_file,
+                disease_name=prediction['disease_name'],
+                confidence=prediction['confidence'],
+                all_probabilities=prediction.get('all_probabilities'),
+                source='ai',
+                status='Healthy' if is_healthy else 'Alert',
+            )
 
-        serializer = DiagnosisResultSerializer(diagnosis, context={'request': request})
-        resp_data = serializer.data
-        resp_data['tips'] = prediction.get('tips', [])
-        resp_data['weather'] = weather
-        # Pass through the rich metadata from the HF Space so the Flutter
-        # client can render XAI overlays, YOLO crop previews, etc.
-        for extra in (
-            'image_stage_probabilities', 'image_stage_top_class',
-            'image_stage_top_confidence', 'yolo_detected', 'yolo_confidence',
-            'crop_preview_data_url', 'xai', 'pipeline', 'accepted', 'rejected',
-        ):
-            if extra in prediction:
-                resp_data[extra] = prediction[extra]
-        return Response(resp_data, status=status.HTTP_201_CREATED)
+            serializer = DiagnosisResultSerializer(diagnosis, context={'request': request})
+            resp_data = serializer.data
+            resp_data['tips'] = prediction.get('tips', [])
+            resp_data['weather'] = weather
+            # Pass through the rich metadata from the HF Space so the Flutter
+            # client can render XAI overlays, YOLO crop previews, etc.
+            for extra in (
+                'image_stage_probabilities', 'image_stage_top_class',
+                'image_stage_top_confidence', 'yolo_detected', 'yolo_confidence',
+                'crop_preview_data_url', 'xai', 'pipeline', 'accepted', 'rejected',
+            ):
+                if extra in prediction:
+                    resp_data[extra] = prediction[extra]
+            return Response(resp_data, status=status.HTTP_201_CREATED)
+        except Exception as exc:
+            logger.error('DiagnoseView persistence failure:\n%s', traceback.format_exc())
+            return Response(
+                {'error': f'Failed to save diagnosis: {exc}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class HistoryView(generics.ListCreateAPIView):

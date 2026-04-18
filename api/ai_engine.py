@@ -151,10 +151,16 @@ def predict_disease(image_file, weather=None):
     if api_key:
         headers['Authorization'] = f'Bearer {api_key}'
 
+    # Buffer the bytes so we can rewind the Django UploadedFile afterwards —
+    # views.py still needs to persist the same file on the DiagnosisResult
+    # row when the sample is accepted.
+    image_bytes = image_file.read()
+    image_file.seek(0)
+
     files = {
         'image': (
             image_file.name,
-            image_file.read(),
+            image_bytes,
             image_file.content_type or 'application/octet-stream',
         ),
     }
