@@ -14,6 +14,7 @@ grpcio-status on Render.
 
 import logging
 import os
+import re
 
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -59,6 +60,30 @@ MAX_HISTORY_TURNS = 20
 MAX_MESSAGE_CHARS = 2000
 
 
+# Belt-and-braces sanitiser for model replies. The system prompt tells
+# Gemini to avoid markdown, but the model occasionally slips one in. We
+# strip the common emphasis wrappers so the client never shows literal
+# asterisks / underscores / backticks to a farmer who can't read them.
+_MD_BOLD = re.compile(r'\*\*(.+?)\*\*', re.DOTALL)
+_MD_ITAL = re.compile(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', re.DOTALL)
+_MD_UNDER = re.compile(r'__(.+?)__', re.DOTALL)
+_MD_ITAL_U = re.compile(r'(?<!_)_(?!_)(.+?)(?<!_)_(?!_)', re.DOTALL)
+_MD_HEADING = re.compile(r'^\s{0,3}#{1,6}\s+', re.MULTILINE)
+_MD_BACKTICK = re.compile(r'`([^`]+)`')
+
+
+def _strip_markdown(text: str) -> str:
+    if not text:
+        return text
+    text = _MD_BOLD.sub(r'\1', text)
+    text = _MD_UNDER.sub(r'\1', text)
+    text = _MD_ITAL.sub(r'\1', text)
+    text = _MD_ITAL_U.sub(r'\1', text)
+    text = _MD_HEADING.sub('', text)
+    text = _MD_BACKTICK.sub(r'\1', text)
+    return text
+
+
 def _build_system_prompt(farm_name: str, last_diagnosis: dict | None) -> str:
     """
     Craft a system prompt that anchors the model as a Pakistani poultry
@@ -67,7 +92,7 @@ def _build_system_prompt(farm_name: str, last_diagnosis: dict | None) -> str:
     Urdu or English without a mode switch.
     """
     lines = [
-        "You are AvianVet, an expert poultry veterinarian assisting a farmer in Pakistan.",
+        "You are an expert poultry care helper assisting a farmer in Pakistan.",
         "",
         "RULES:",
         "- Reply in the same language the farmer uses (Urdu or English). Detect per-message.",
@@ -77,7 +102,9 @@ def _build_system_prompt(farm_name: str, last_diagnosis: dict | None) -> str:
         "- If the farmer asks about disease symptoms, be concrete: list 3-5 signs, cause, and 2-3 practical actions.",
         "- If asked about unrelated topics (politics, entertainment), politely redirect to poultry care.",
         "- If the farmer writes Urdu, reply in Urdu script. If English, reply in English.",
-        "- Format answers in short paragraphs or bullet lists — never walls of text.",
+        "- CRITICAL formatting rule: never use markdown. Do NOT output asterisks (**), underscores (__), backticks, or heading marks (#). Do not bold, italicize, or code-format anything. The client renders plain text — markdown syntax will appear literally and looks broken.",
+        "- For lists, use a simple line-break with a short dash: '- item'. Don't use nested bullets.",
+        "- Keep sentences short. One idea per line when listing steps.",
     ]
     if farm_name:
         lines.append(f"\nFARMER CONTEXT:\n- Farm name: {farm_name}")
@@ -215,6 +242,7 @@ class ChatbotView(APIView):
                     {'error': 'empty_reply'},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
+            reply = _strip_markdown(reply)
             return Response({'reply': reply})
         except Exception as e:  # noqa: BLE001
             # Upstream retryable errors (quota, transient, bad key) bubble
