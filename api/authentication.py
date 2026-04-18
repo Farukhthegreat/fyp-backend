@@ -2,6 +2,7 @@ from rest_framework import authentication, exceptions
 from firebase_admin import auth
 from django.contrib.auth.models import User
 from .models import Farm
+from .name_utils import split_display_name
 
 
 class FirebaseAuthentication(authentication.BaseAuthentication):
@@ -46,6 +47,7 @@ class FirebaseAuthentication(authentication.BaseAuthentication):
             email = decoded_token.get('email', '')
             phone_number = decoded_token.get('phone_number', '')
             display_name = decoded_token.get('name', '')
+            token_first_name, token_last_name = split_display_name(display_name)
 
             # JIT Provisioning: Try to get existing user
             try:
@@ -56,9 +58,13 @@ class FirebaseAuthentication(authentication.BaseAuthentication):
                 if email and user.email != email:
                     user.email = email
                     updated = True
-                if display_name and user.first_name != display_name[:30]:
-                    user.first_name = display_name[:30]
-                    updated = True
+                if display_name:
+                    if user.first_name != token_first_name:
+                        user.first_name = token_first_name
+                        updated = True
+                    if user.last_name != token_last_name:
+                        user.last_name = token_last_name
+                        updated = True
                 if updated:
                     user.save()
 
@@ -67,7 +73,8 @@ class FirebaseAuthentication(authentication.BaseAuthentication):
                 user = User.objects.create_user(
                     username=uid,
                     email=email,
-                    first_name=display_name[:30] if display_name else '',
+                    first_name=token_first_name,
+                    last_name=token_last_name,
                     password=None  # Firebase handles authentication
                 )
                 

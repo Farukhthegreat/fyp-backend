@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
+from .name_utils import normalize_name_parts
 from .models import (
     Farm, DiagnosisResult, Supplier, SupplierProduct,
     Expert, ChatRoom, ChatMessage, DailyTask, TaskCompletion, Article,
@@ -33,15 +34,29 @@ class UserProfileSerializer(serializers.Serializer):
     def create(self, validated_data):
         pass
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        first_name, last_name = normalize_name_parts(
+            data.get('first_name', ''),
+            data.get('last_name', ''),
+        )
+        data['first_name'] = first_name
+        data['last_name'] = last_name
+        return data
+
     def update(self, instance, validated_data):
         user_data = validated_data.get('user', {})
         user = instance.user
+        clean_first_name, clean_last_name = normalize_name_parts(
+            user_data.get('first_name', user.first_name),
+            user_data.get('last_name', user.last_name),
+        )
         if 'email' in user_data:
             user.email = user_data['email']
         if 'first_name' in user_data:
-            user.first_name = user_data['first_name']
+            user.first_name = clean_first_name
         if 'last_name' in user_data:
-            user.last_name = user_data['last_name']
+            user.last_name = clean_last_name
         user.save()
 
         if 'name' in validated_data:
