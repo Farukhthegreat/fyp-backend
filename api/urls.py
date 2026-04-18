@@ -12,6 +12,7 @@ from .views import (
     FlockSummaryView, AnalyticsView,
     MarketRatesView, MarketRatesRegionView,
 )
+from .chatbot import ChatbotView
 
 urlpatterns = [
     path('health/', HealthView.as_view(), name='health'),
@@ -58,4 +59,8 @@ urlpatterns = [
     # this REST endpoint is a fallback for offline Firestore clients + web.
     path('market-rates/', MarketRatesView.as_view(), name='market-rates'),
     path('market-rates/<str:region_key>/', MarketRatesRegionView.as_view(), name='market-rates-region'),
+
+    # AvianVet chatbot (Gemini-backed). POST-only; keeps the API key server-
+    # side and injects per-user context (farm, latest diagnosis).
+    path('assistant/', ChatbotView.as_view(), name='assistant'),
 ]
