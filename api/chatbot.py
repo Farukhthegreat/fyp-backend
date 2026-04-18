@@ -15,8 +15,6 @@ grpcio-status on Render.
 import logging
 import os
 
-from google import genai
-from google.genai import types as genai_types
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -26,14 +24,16 @@ from .models import DiagnosisResult, Farm
 
 logger = logging.getLogger(__name__)
 
-# Configured lazily so a missing key doesn't crash import at boot — the
-# endpoint returns a 503 with a clear message instead.
-_CLIENT: genai.Client | None = None
+# google.genai is imported lazily on first use. Importing at module load
+# adds ~2-5s to Django's URL-config boot, which on Render's sync gunicorn
+# pushes past the port-detection timeout on cold deploys.
+_CLIENT = None
+_GENAI_TYPES = None
 _GENAI_ERROR: str | None = None
 
 
 def _ensure_client() -> bool:
-    global _CLIENT, _GENAI_ERROR
+    global _CLIENT, _GENAI_TYPES, _GENAI_ERROR
     if _CLIENT is not None:
         return True
     api_key = os.environ.get('GEMINI_API_KEY', '').strip()
@@ -41,7 +41,10 @@ def _ensure_client() -> bool:
         _GENAI_ERROR = 'GEMINI_API_KEY is not configured'
         return False
     try:
+        from google import genai  # noqa: WPS433 — lazy by design
+        from google.genai import types as genai_types  # noqa: WPS433
         _CLIENT = genai.Client(api_key=api_key)
+        _GENAI_TYPES = genai_types
         return True
     except Exception as e:  # noqa: BLE001
         _GENAI_ERROR = f'Gemini client init failed: {e}'
@@ -109,9 +112,9 @@ def _history_to_contents(raw_history):
         if not isinstance(text, str) or not text.strip():
             continue
         contents.append(
-            genai_types.Content(
+            _GENAI_TYPES.Content(
                 role=role,
-                parts=[genai_types.Part.from_text(text=text[:MAX_MESSAGE_CHARS])],
+                parts=[_GENAI_TYPES.Part.from_text(text=text[:MAX_MESSAGE_CHARS])],
             )
         )
     return contents
@@ -186,9 +189,9 @@ class ChatbotView(APIView):
         # user message tacked on at the end.
         contents = _history_to_contents(request.data.get('history'))
         contents.append(
-            genai_types.Content(
+            _GENAI_TYPES.Content(
                 role='user',
-                parts=[genai_types.Part.from_text(text=message)],
+                parts=[_GENAI_TYPES.Part.from_text(text=message)],
             )
         )
 
@@ -199,7 +202,7 @@ class ChatbotView(APIView):
             response = _CLIENT.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=contents,
-                config=genai_types.GenerateContentConfig(
+                config=_GENAI_TYPES.GenerateContentConfig(
                     system_instruction=system_prompt,
                     temperature=0.7,
                     top_p=0.9,
