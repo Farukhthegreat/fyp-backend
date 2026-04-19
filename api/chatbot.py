@@ -84,6 +84,29 @@ def _strip_markdown(text: str) -> str:
     return text
 
 
+# The system prompt tells Gemini not to tack on follow-up question
+# suggestions, but the model sometimes ignores that. Cut any trailing
+# section that starts with a giveaway phrase so the client only ever sees
+# the actual answer — the UI has its own suggestion chips on the empty
+# state that duplicate this noise visually.
+_FOLLOWUP_PATTERNS = re.compile(
+    r'\n\s*(?:'
+    r'(?:you\s+(?:might|could|can|may)\s+(?:also\s+)?ask|'
+    r'(?:here\s+are\s+)?(?:some\s+)?(?:related|other|follow[- ]?up|similar)\s+questions?|'
+    r'try\s+asking|want\s+to\s+know\s+more|if\s+you.?(?:re|d)\s+curious|'
+    r'would\s+you\s+like\s+to\s+(?:know|ask)|'
+    r'کچھ\s+اور\s+سوالات|مزید\s+سوالات|آپ\s+یہ\s+بھی\s+پوچھ\s+سکتے)'
+    r'[^\n]*(?:\n.*)?$)',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_followup_suggestions(text: str) -> str:
+    if not text:
+        return text
+    return _FOLLOWUP_PATTERNS.sub('', text).rstrip()
+
+
 def _build_system_prompt(farm_name: str, last_diagnosis: dict | None) -> str:
     """
     Craft a system prompt that anchors the model as a Pakistani poultry
@@ -105,6 +128,8 @@ def _build_system_prompt(farm_name: str, last_diagnosis: dict | None) -> str:
         "- CRITICAL formatting rule: never use markdown. Do NOT output asterisks (**), underscores (__), backticks, or heading marks (#). Do not bold, italicize, or code-format anything. The client renders plain text — markdown syntax will appear literally and looks broken.",
         "- For lists, use a simple line-break with a short dash: '- item'. Don't use nested bullets.",
         "- Keep sentences short. One idea per line when listing steps.",
+        "- NEVER suggest follow-up questions at the end of your answer. Do not write 'You might also ask:', 'Try asking:', 'Some related questions:', or list alternative questions. The client provides its own suggestion UI. Always end with your direct answer and nothing else.",
+        "- Do NOT echo or rephrase the user's question back before answering. Start with the answer directly.",
     ]
     if farm_name:
         lines.append(f"\nFARMER CONTEXT:\n- Farm name: {farm_name}")
@@ -243,6 +268,7 @@ class ChatbotView(APIView):
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
             reply = _strip_markdown(reply)
+            reply = _strip_followup_suggestions(reply)
             return Response({'reply': reply})
         except Exception as e:  # noqa: BLE001
             # Upstream retryable errors (quota, transient, bad key) bubble
