@@ -106,19 +106,23 @@ def fetch_weather(lat, lon):
     if not lat or not lon:
         return defaults
     try:
+        # pressure_msl (sea-level reduced) is what the dashboard already uses
+        # and gives consistent ~1010 hPa readings across elevations, whereas
+        # surface_pressure varies heavily by altitude and sometimes returns
+        # null from Open-Meteo — which is why the field kept defaulting.
         url = (
             f'https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}'
-            f'&current=temperature_2m,relative_humidity_2m,wind_speed_10m,surface_pressure'
+            f'&current=temperature_2m,relative_humidity_2m,wind_speed_10m,pressure_msl'
         )
         resp = requests.get(url, timeout=5)
         if resp.status_code != 200:
             return defaults
         data = resp.json().get('current', {})
         return {
-            'temperature': data.get('temperature_2m', 25.0),
-            'humidity': data.get('relative_humidity_2m', 50.0),
-            'wind_speed': data.get('wind_speed_10m', 5.0),
-            'pressure': data.get('surface_pressure', 1010.0),
+            'temperature': data.get('temperature_2m') if data.get('temperature_2m') is not None else 25.0,
+            'humidity': data.get('relative_humidity_2m') if data.get('relative_humidity_2m') is not None else 50.0,
+            'wind_speed': data.get('wind_speed_10m') if data.get('wind_speed_10m') is not None else 5.0,
+            'pressure': data.get('pressure_msl') if data.get('pressure_msl') is not None else 1010.0,
         }
     except Exception:
         return defaults
