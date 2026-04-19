@@ -300,7 +300,10 @@ def predict_video(video_file, weather=None):
             headers=headers,
             files=files,
             data=form_data,
-            timeout=_INFERENCE_TIMEOUT * 2,  # video is slower than images
+            # Video inference on HF CPU Basic can take 2-3 minutes per clip
+            # plus cold-start, so we give it a large ceiling. If the HTTP
+            # connection drops we want a clear error, not a silent timeout.
+            timeout=(30, 360),
         )
     except requests.RequestException as exc:
         raise RuntimeError(f'AI video request failed: {exc}') from exc
