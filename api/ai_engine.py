@@ -286,12 +286,12 @@ def predict_video(video_file, weather=None):
         'pressure':    str(w.get('pressure', 1010.0)),
         'ammonia':     '10.0',
         'use_uploaded_audio': 'false',
-        # Keep payload size sane — the HF Space caps at these by default,
-        # but pinning them means examiner uploads can't accidentally ask
-        # for 300 frames and time the request out.
+        # Match the lighter standalone tester profile. The earlier 24-frame /
+        # 4-box setup was noticeably slower on Render -> HF CPU and made the
+        # mobile app feel hung on ordinary phone clips.
         'sample_fps': '1.0',
-        'max_frames': '24',
-        'max_boxes_per_frame': '4',
+        'max_frames': '12',
+        'max_boxes_per_frame': '2',
     }
 
     try:
@@ -300,10 +300,7 @@ def predict_video(video_file, weather=None):
             headers=headers,
             files=files,
             data=form_data,
-            # Video inference on HF CPU Basic can take 2-3 minutes per clip
-            # plus cold-start, so we give it a large ceiling. If the HTTP
-            # connection drops we want a clear error, not a silent timeout.
-            timeout=(30, 360),
+            timeout=(30, 180),
         )
     except requests.RequestException as exc:
         raise RuntimeError(f'AI video request failed: {exc}') from exc

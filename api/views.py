@@ -263,12 +263,11 @@ class VideoDiagnoseView(APIView):
             )
 
         video_file = request.FILES['video']
-        # Safety rail — the HF Space free tier is CPU-only, large videos
-        # kill the request window. Reject >50MB before we spend 120s
-        # streaming it upstream.
-        if video_file.size and video_file.size > 50 * 1024 * 1024:
+        # Match the mobile app guardrail. Large phone clips take too long to
+        # upload through Render before inference even begins.
+        if video_file.size and video_file.size > 20 * 1024 * 1024:
             return Response(
-                {'error': 'Video exceeds 50 MB limit'},
+                {'error': 'Video exceeds 20 MB limit'},
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
 
