@@ -218,3 +218,105 @@ def predict_disease(image_file, weather=None):
     result.setdefault('rejected', False)
 
     return result
+
+
+# --------------------------------------------------------------------------
+# Video inference proxy
+# --------------------------------------------------------------------------
+
+def _video_endpoint():
+    """Derive /analyze-video from AI_INFERENCE_URL so operators only have to
+    configure one env var."""
+    base = os.getenv('AI_INFERENCE_URL', '').strip()
+    if not base:
+        return ''
+    # Strip trailing segment (usually /predict) and append /analyze-video.
+    if base.endswith('/'):
+        base = base.rstrip('/')
+    if '/' in base.split('://', 1)[-1]:
+        host, _, _ = base.rpartition('/')
+        return f'{host}/analyze-video'
+    return f'{base}/analyze-video'
+
+
+def predict_video(video_file, weather=None):
+    """Call the HF Space /analyze-video endpoint. Returns the full JSON
+    response (frame reports, diagnosis counts, XAI summary, annotated video
+    URL) so the Flutter client can render the monitoring view directly.
+
+    Falls back to a short demo payload if AI_INFERENCE_URL is unset so local
+    dev doesn't crash.
+    """
+    endpoint = _video_endpoint()
+    if not endpoint:
+        # Minimal demo so the UI path can still be exercised locally.
+        return {
+            'status': 'demo',
+            'analysis_mode': 'uploaded_video_monitoring',
+            'top_diagnosis': 'Healthy',
+            'diagnosis_counts': {'Healthy': 1},
+            'processed_frames': 1,
+            'source_duration_sec': 0.0,
+            'frame_reports': [],
+            'xai_summary': {'method': 'demo', 'note': 'No HF endpoint configured.'},
+        }
+
+    api_key = os.getenv('AI_INFERENCE_API_KEY', '').strip()
+    video_file.seek(0)
+    video_bytes = video_file.read()
+    video_file.seek(0)
+
+    headers = {}
+    if api_key:
+        headers['Authorization'] = f'Bearer {api_key}'
+
+    files = {
+        'video': (
+            video_file.name,
+            video_bytes,
+            video_file.content_type or 'video/mp4',
+        ),
+    }
+
+    w = weather or {}
+    form_data = {
+        'temperature': str(w.get('temperature', 25.0)),
+        'humidity':    str(w.get('humidity', 50.0)),
+        'wind_speed':  str(w.get('wind_speed', 5.0)),
+        'pressure':    str(w.get('pressure', 1010.0)),
+        'ammonia':     '10.0',
+        'use_uploaded_audio': 'false',
+        # Keep payload size sane — the HF Space caps at these by default,
+        # but pinning them means examiner uploads can't accidentally ask
+        # for 300 frames and time the request out.
+        'sample_fps': '1.0',
+        'max_frames': '24',
+        'max_boxes_per_frame': '4',
+    }
+
+    try:
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            files=files,
+            data=form_data,
+            timeout=_INFERENCE_TIMEOUT * 2,  # video is slower than images
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f'AI video request failed: {exc}') from exc
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f'AI video service returned HTTP {response.status_code}: '
+            f'{response.text[:400]}'
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError('AI video response is not valid JSON') from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError('AI video response must be a JSON object')
+
+    return payload

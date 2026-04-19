@@ -19,7 +19,7 @@ from .serializers import (
     DailyTaskSerializer, ArticleListSerializer, ArticleDetailSerializer,
     VaccinationRecordSerializer, MortalityLogSerializer, TreatmentRecordSerializer,
 )
-from .ai_engine import predict_disease, fetch_weather
+from .ai_engine import predict_disease, predict_video, fetch_weather
 from .notifications import send_fcm_notification
 from firebase_admin import firestore as admin_firestore
 
@@ -237,6 +237,68 @@ class DiagnoseView(APIView):
                 {'error': f'Failed to save diagnosis: {exc}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class VideoDiagnoseView(APIView):
+    """
+    POST /api/diagnose-video/
+    Accepts a multipart upload with field name 'video' plus optional
+    lat/lon/weather, proxies the file to the HF Space /analyze-video
+    endpoint, and returns the raw monitoring JSON (frame reports with
+    detections, XAI heatmap data URLs, diagnosis counts, annotated video
+    link). We do NOT persist video analyses into DiagnosisResult — they
+    produce many detections, not a single clean row, so they're treated
+    as an advisory monitoring tool for now.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import logging, traceback
+        logger = logging.getLogger(__name__)
+
+        if 'video' not in request.FILES:
+            return Response(
+                {'error': 'No video provided'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        video_file = request.FILES['video']
+        # Safety rail — the HF Space free tier is CPU-only, large videos
+        # kill the request window. Reject >50MB before we spend 120s
+        # streaming it upstream.
+        if video_file.size and video_file.size > 50 * 1024 * 1024:
+            return Response(
+                {'error': 'Video exceeds 50 MB limit'},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+
+        lat = request.data.get('latitude')
+        lon = request.data.get('longitude')
+        weather = fetch_weather(lat, lon)
+
+        try:
+            result = predict_video(video_file, weather=weather)
+        except RuntimeError as exc:
+            logger.warning('predict_video RuntimeError: %s', exc)
+            return Response(
+                {'error': str(exc)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception as exc:
+            logger.error('predict_video unexpected error:\n%s', traceback.format_exc())
+            return Response(
+                {'error': f'Video inference failed: {exc}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Echo the farm + weather context alongside so the client can
+        # render the farmer's own context on the result screen without a
+        # second round-trip.
+        farm = Farm.objects.filter(user=request.user).first()
+        result['weather'] = weather
+        if farm:
+            result['farm_name'] = farm.name
+        return Response(result, status=status.HTTP_200_OK)
 
 
 class HistoryView(generics.ListCreateAPIView):
