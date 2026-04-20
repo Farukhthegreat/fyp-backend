@@ -13,7 +13,7 @@ from .views import (
     FlockSummaryView, AnalyticsView,
     MarketRatesView, MarketRatesRegionView,
 )
-from .chatbot import ChatbotView
+from .chatbot import ChatbotView, XaiExplainView
 
 urlpatterns = [
     path('health/', HealthView.as_view(), name='health'),
@@ -66,4 +66,5 @@ urlpatterns = [
     # AvianVet chatbot (Gemini-backed). POST-only; keeps the API key server-
     # side and injects per-user context (farm, latest diagnosis).
     path('assistant/', ChatbotView.as_view(), name='assistant'),
+    path('xai-explain/', XaiExplainView.as_view(), name='xai-explain'),
 ]

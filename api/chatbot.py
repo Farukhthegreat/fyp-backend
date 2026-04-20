@@ -285,3 +285,172 @@ class ChatbotView(APIView):
                 },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+
+
+# --------------------------------------------------------------------------
+# XAI explanation view
+# --------------------------------------------------------------------------
+
+# Gemini vision call gets the cropped poultry sample + the model's picked
+# class and writes a short, farmer-friendly explanation of *which visual
+# patterns* (colour, texture, blood traces, shape, etc.) drove the call.
+# This replaces the raw heatmap as the primary XAI artefact — the heatmap
+# didn't localise the way farmers expected, so a plain-text doctor-style
+# explanation builds trust better.
+
+
+_XAI_SYSTEM = (
+    "You are an expert poultry veterinarian writing a short XAI "
+    "(Explainable AI) note for a Pakistani farmer. An image classifier "
+    "predicted a disease class from a photo of chicken faeces. Your job: "
+    "explain the visual evidence that supports this class. Describe what "
+    "you actually see in the image — colour, texture, consistency, blood "
+    "traces, mucus, white/chalky streaks, frothy appearance, shape, "
+    "undigested feed, or other patterns. Tie each observation to the "
+    "predicted class. If the prediction is Healthy, say why the sample "
+    "looks normal (brown/green, solid, no blood, moderate size). Never "
+    "invent symptoms not visible in the image. Keep it grounded.\n\n"
+    "RULES:\n"
+    "- Reply in the SAME language the farmer asked in (Urdu or English).\n"
+    "- 60-120 words. Short sentences.\n"
+    "- No markdown. No asterisks, underscores, or headings.\n"
+    "- Structure: 1 sentence on visible evidence; 2-3 specific bullet-"
+    "style observations each tied to the prediction; 1 sentence on what "
+    "this means for the flock.\n"
+    "- Prefix each bullet with '- '.\n"
+    "- Don't quote probabilities back at the farmer. Don't say 'the AI' "
+    "or 'the model'. Speak as if you examined the sample yourself.\n"
+    "- If the image clearly does not match the predicted class (e.g. "
+    "predicted 'Coccidiosis' but no blood visible), say so honestly — "
+    "transparency is the goal."
+)
+
+
+def _xai_prompt(disease_name: str, confidence: float,
+                probabilities: dict, language: str) -> str:
+    runners = ''
+    if isinstance(probabilities, dict) and probabilities:
+        top = sorted(
+            ((k, float(v)) for k, v in probabilities.items()
+             if isinstance(v, (int, float))),
+            key=lambda kv: -kv[1],
+        )[:3]
+        runners = ', '.join(f'{k} {v:.1f}%' for k, v in top)
+    lang_hint = 'Urdu' if language == 'ur' else 'English'
+    return (
+        f"Predicted class: {disease_name} (confidence {confidence:.1f}%).\n"
+        f"Top probabilities: {runners or 'n/a'}.\n"
+        f"Write the explanation in {lang_hint}.\n"
+        "Look at the attached crop image and explain what visual cues "
+        "support or contradict this prediction."
+    )
+
+
+class XaiExplainView(APIView):
+    """
+    POST /api/xai-explain/
+
+    Body (JSON):
+      {
+        "disease_name": "Coccidiosis",
+        "confidence": 87.4,
+        "all_probabilities": {"Healthy": 5.2, "Coccidiosis": 87.4, ...},
+        "image_data_url": "data:image/jpeg;base64,...",   # required
+        "language": "en" | "ur"                            # optional, default "en"
+      }
+
+    Response:
+      {
+        "explanation": "The sample shows dark, watery stools with fine "
+                       "red-brown streaks...",
+        "language": "en"
+      }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import base64
+
+        if not _ensure_client():
+            return Response(
+                {'error': 'assistant_unavailable'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        disease_name = (request.data.get('disease_name') or '').strip()
+        if not disease_name:
+            return Response(
+                {'error': 'disease_name is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            confidence = float(request.data.get('confidence') or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        language = (request.data.get('language') or 'en').strip().lower()
+        if language not in ('en', 'ur'):
+            language = 'en'
+
+        image_data_url = request.data.get('image_data_url') or ''
+        if not isinstance(image_data_url, str) or not image_data_url.startswith('data:image'):
+            return Response(
+                {'error': 'image_data_url is required (data:image/...;base64,...)'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            header, b64 = image_data_url.split(',', 1)
+            mime = 'image/jpeg'
+            if 'image/png' in header:
+                mime = 'image/png'
+            image_bytes = base64.b64decode(b64)
+        except Exception:
+            return Response(
+                {'error': 'invalid image_data_url'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        probabilities = request.data.get('all_probabilities') or {}
+        if not isinstance(probabilities, dict):
+            probabilities = {}
+
+        user_text = _xai_prompt(disease_name, confidence, probabilities, language)
+
+        try:
+            response = _CLIENT.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[
+                    _GENAI_TYPES.Content(
+                        role='user',
+                        parts=[
+                            _GENAI_TYPES.Part.from_bytes(
+                                data=image_bytes, mime_type=mime,
+                            ),
+                            _GENAI_TYPES.Part.from_text(text=user_text),
+                        ],
+                    ),
+                ],
+                config=_GENAI_TYPES.GenerateContentConfig(
+                    system_instruction=_XAI_SYSTEM,
+                    temperature=0.4,
+                    top_p=0.9,
+                    max_output_tokens=420,
+                ),
+            )
+            explanation = (getattr(response, 'text', None) or '').strip()
+            if not explanation:
+                return Response(
+                    {'error': 'empty_reply'},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+            explanation = _strip_markdown(explanation)
+            return Response({'explanation': explanation, 'language': language})
+        except Exception as e:  # noqa: BLE001
+            logger.exception('Gemini XAI call failed')
+            return Response(
+                {
+                    'error': 'upstream_error',
+                    'error_type': type(e).__name__,
+                    'detail': str(e)[:400],
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
