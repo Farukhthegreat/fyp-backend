@@ -134,10 +134,33 @@ class DiagnoseView(APIView):
 
         image_file = request.FILES['image']
 
-        # Fetch weather data using coordinates from the request (optional)
+        # Prefer weather values sent by the client when present — Flutter
+        # fetches pressure_msl directly from Open-Meteo on the device, so
+        # values stay accurate even if the Render worker has a stale
+        # fetch_weather cache or the dyno is slow to update. Fall back to
+        # the server-side fetch when any field is missing.
         lat = request.data.get('latitude')
         lon = request.data.get('longitude')
-        weather = fetch_weather(lat, lon)
+
+        def _num(val):
+            try:
+                return float(val) if val not in (None, '', 'null') else None
+            except (TypeError, ValueError):
+                return None
+
+        client_weather = {
+            'temperature': _num(request.data.get('temperature')),
+            'humidity': _num(request.data.get('humidity')),
+            'wind_speed': _num(request.data.get('wind_speed')),
+            'pressure': _num(request.data.get('pressure')),
+        }
+        if all(v is not None for v in client_weather.values()):
+            weather = client_weather
+        else:
+            weather = fetch_weather(lat, lon)
+            for k, v in client_weather.items():
+                if v is not None:
+                    weather[k] = v
 
         try:
             prediction = predict_disease(image_file, weather=weather)
@@ -298,6 +321,106 @@ class VideoDiagnoseView(APIView):
         if farm:
             result['farm_name'] = farm.name
         return Response(result, status=status.HTTP_200_OK)
+
+
+class SaveVideoDiagnosisView(APIView):
+    """
+    POST /api/save-video-diagnosis/
+    Accepts the JSON payload returned by the HF Space /analyze-video
+    (Flutter calls HF directly to avoid Render's gunicorn timeout) and
+    persists it as a DiagnosisResult row so the video monitoring run
+    shows up in Reports/History alongside image diagnoses.
+
+    Expected body fields (all optional except top_diagnosis):
+      - top_diagnosis: str
+      - confidence: float (0-100)
+      - diagnosis_counts: {class: count}
+      - weather: {temperature, humidity, wind_speed, pressure}
+      - frame_reports: list (embedded in analysis_payload)
+      - top_frame_data_url: data URL of the representative annotated
+        frame — saved as the DiagnosisResult image so the Reports
+        tile has something to show.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import base64
+        import logging
+        from django.core.files.base import ContentFile
+
+        logger = logging.getLogger(__name__)
+        data = request.data or {}
+
+        disease_name = (data.get('top_diagnosis') or 'Unknown').strip()
+        try:
+            confidence = float(data.get('confidence') or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        is_healthy = disease_name.lower() == 'healthy'
+        status_label = 'Healthy' if is_healthy else 'Alert'
+
+        farm = Farm.objects.filter(user=request.user).first()
+
+        diagnosis = DiagnosisResult(
+            user=request.user,
+            farm=farm,
+            disease_name=disease_name,
+            confidence=confidence,
+            source='ai_video',
+            status=status_label,
+            all_probabilities=data.get('diagnosis_counts') or {},
+            analysis_payload={
+                'pipeline': 'video_monitoring',
+                'weather': data.get('weather'),
+                'frame_reports': data.get('frame_reports'),
+                'diagnosis_counts': data.get('diagnosis_counts'),
+                'processed_frames': data.get('processed_frames'),
+                'source_duration_sec': data.get('source_duration_sec'),
+                'xai_summary': data.get('xai_summary'),
+                'tips': data.get('tips'),
+            },
+        )
+
+        # Save the top representative frame as the row's image so the
+        # Reports grid tile renders something meaningful instead of a
+        # placeholder.
+        top_url = data.get('top_frame_data_url')
+        if isinstance(top_url, str) and top_url.startswith('data:image'):
+            try:
+                header, b64 = top_url.split(',', 1)
+                ext = 'jpg'
+                if 'image/png' in header:
+                    ext = 'png'
+                img_bytes = base64.b64decode(b64)
+                diagnosis.image.save(
+                    f'video_{request.user.id}_{int(confidence)}.{ext}',
+                    ContentFile(img_bytes),
+                    save=False,
+                )
+            except Exception as exc:
+                logger.warning('video top-frame decode failed: %s', exc)
+
+        try:
+            diagnosis.save()
+        except Exception as exc:
+            logger.error('Failed to save video diagnosis: %s', exc)
+            return Response(
+                {'error': f'Failed to save: {exc}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                'id': diagnosis.id,
+                'created_at': diagnosis.created_at.isoformat(),
+                'disease_name': diagnosis.disease_name,
+                'confidence': diagnosis.confidence,
+                'source': diagnosis.source,
+                'status': diagnosis.status,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class HistoryView(generics.ListCreateAPIView):
