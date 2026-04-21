@@ -13,7 +13,7 @@ from .views import (
     FlockSummaryView, AnalyticsView,
     MarketRatesView, MarketRatesRegionView,
 )
-from .chatbot import ChatbotView, XaiExplainView, TranslateBatchView
+from .chatbot import ChatbotView, XaiExplainView
 
 urlpatterns = [
     path('health/', HealthView.as_view(), name='health'),
@@ -67,5 +67,4 @@ urlpatterns = [
     # side and injects per-user context (farm, latest diagnosis).
     path('assistant/', ChatbotView.as_view(), name='assistant'),
     path('xai-explain/', XaiExplainView.as_view(), name='xai-explain'),
-    path('translate-batch/', TranslateBatchView.as_view(), name='translate-batch'),
 ]
