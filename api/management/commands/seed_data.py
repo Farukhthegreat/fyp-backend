@@ -84,25 +84,54 @@ class Command(BaseCommand):
                 'username': 'dr_ahmed', 'first_name': 'Dr. Ahmed',
                 'email': 'ahmed@example.com',
                 'specialization': 'Poultry Disease Specialist',
+                'specialization_urdu': 'پولٹری امراض کے ماہر',
                 'whatsapp': '+923001234568', 'phone': '+923001234568',
             },
             {
                 'username': 'dr_fatima', 'first_name': 'Dr. Fatima',
                 'email': 'fatima@example.com',
                 'specialization': 'Avian Nutrition Expert',
+                'specialization_urdu': 'مرغیوں کی غذائیت کے ماہر',
                 'whatsapp': '+923009876544', 'phone': '+923009876544',
             },
             {
                 'username': 'dr_hassan', 'first_name': 'Dr. Hassan',
                 'email': 'hassan@example.com',
                 'specialization': 'Poultry Farm Management',
+                'specialization_urdu': 'پولٹری فارم انتظام',
                 'whatsapp': '+923005551235', 'phone': '+923005551235',
             },
             {
                 'username': 'dr_ayesha', 'first_name': 'Dr. Ayesha',
                 'email': 'ayesha@example.com',
                 'specialization': 'Veterinary Surgeon',
+                'specialization_urdu': 'جانوروں کے ڈاکٹر (سرجن)',
                 'whatsapp': '+923007778900', 'phone': '+923007778900',
+            },
+            {
+                'username': 'dr_khalid', 'first_name': 'Dr. Khalid',
+                'email': 'khalid@example.com',
+                'specialization': 'Broiler Health Advisor',
+                'specialization_urdu': 'برائلر صحت کے ماہر',
+                'city': 'Sialkot',
+                'city_urdu': 'سیالکوٹ',
+                'whatsapp': '+923331112220', 'phone': '+923331112220',
+            },
+            {
+                'username': 'dr_sara', 'first_name': 'Dr. Sara',
+                'email': 'sara@example.com',
+                'specialization': 'Layer Farm Consultant',
+                'specialization_urdu': 'لیئر فارم کے مشیر',
+                'city': 'Multan',
+                'city_urdu': 'ملتان',
+                'whatsapp': '+923441112220', 'phone': '+923441112220',
+            },
+            {
+                'username': 'dr_taha', 'first_name': 'Dr. Taha',
+                'email': 'taha@example.com',
+                'specialization': 'Poultry Disease Specialist',
+                'specialization_urdu': 'پولٹری امراض کے ماہر',
+                'whatsapp': '+923221112220', 'phone': '+923221112220',
             },
         ]
 
@@ -114,14 +143,27 @@ class Command(BaseCommand):
                     'email': e_data['email'],
                 }
             )
-            Expert.objects.get_or_create(
+            defaults = {
+                'specialization': e_data['specialization'],
+                'specialization_urdu': e_data.get('specialization_urdu', ''),
+                'whatsapp': e_data['whatsapp'],
+                'phone': e_data['phone'],
+            }
+            if 'city' in e_data:
+                defaults['city'] = e_data['city']
+            if 'city_urdu' in e_data:
+                defaults['city_urdu'] = e_data['city_urdu']
+            obj, created = Expert.objects.get_or_create(
                 user=user,
-                defaults={
-                    'specialization': e_data['specialization'],
-                    'whatsapp': e_data['whatsapp'],
-                    'phone': e_data['phone'],
-                }
+                defaults=defaults,
             )
+            # Backfill Urdu fields on existing rows so re-seeding refreshes
+            # older records that predate the Urdu columns.
+            if not created and not obj.specialization_urdu:
+                obj.specialization_urdu = e_data.get('specialization_urdu', '')
+                if e_data.get('city_urdu'):
+                    obj.city_urdu = e_data['city_urdu']
+                obj.save(update_fields=['specialization_urdu', 'city_urdu'])
         self.stdout.write(f'  Created {len(experts_data)} experts')
 
     def seed_tasks(self):

@@ -187,7 +187,8 @@ class ExpertListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Expert
         fields = [
-            'id', 'name', 'email', 'specialization', 'city',
+            'id', 'name', 'email', 'specialization', 'specialization_urdu',
+            'city', 'city_urdu',
             'years_experience', 'rating',
         ]
 
@@ -203,11 +204,17 @@ class ExpertDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Expert
         fields = [
-            'id', 'name', 'email', 'specialization', 'phone',
-            'whatsapp', 'is_available', 'qualification', 'clinic_name',
-            'city', 'years_experience', 'consultation_hours',
-            'consultation_fee', 'languages', 'about', 'rating',
-            'total_consultations',
+            'id', 'name', 'email',
+            'specialization', 'specialization_urdu',
+            'phone', 'whatsapp', 'is_available',
+            'qualification', 'qualification_urdu',
+            'clinic_name', 'clinic_name_urdu',
+            'city', 'city_urdu',
+            'years_experience',
+            'consultation_hours', 'consultation_hours_urdu',
+            'consultation_fee', 'languages',
+            'about', 'about_urdu',
+            'rating', 'total_consultations',
         ]
 
 
