@@ -12,7 +12,6 @@ SDK pins an incompatible protobuf range that collides with Firebase Admin's
 grpcio-status on Render.
 """
 
-import json
 import logging
 import os
 import re
