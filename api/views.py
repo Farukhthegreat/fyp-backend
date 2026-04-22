@@ -323,6 +323,113 @@ class VideoDiagnoseView(APIView):
         return Response(result, status=status.HTTP_200_OK)
 
 
+class SaveImageDiagnosisView(APIView):
+    """
+    POST /api/save-image-diagnosis/
+    Accepts the JSON payload returned by the HF Space /predict (Flutter
+    now calls HF directly to avoid Render's gunicorn timeout cutting
+    off slow cold-start inference). Persists it as a DiagnosisResult
+    row so the image diagnosis shows up in Reports / History.
+
+    Expected body fields:
+      - disease_name, confidence, all_probabilities
+      - weather, tips, xai, pipeline
+      - image_stage_probabilities / image_stage_top_class / ...
+      - yolo_detected, yolo_confidence, crop_preview_data_url
+      - image_data_url: base64 data URL of the original image
+      - image_filename: original filename (for the stored file)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import base64
+        import logging
+        from django.core.files.base import ContentFile
+
+        logger = logging.getLogger(__name__)
+        data = request.data or {}
+
+        disease_name = (data.get('disease_name') or 'Unknown').strip()
+        try:
+            confidence = float(data.get('confidence') or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        is_healthy = disease_name.lower() == 'healthy'
+        status_label = 'Healthy' if is_healthy else 'Alert'
+
+        farm = Farm.objects.filter(user=request.user).first()
+
+        # Mirror the same analysis_payload keys Django's /diagnose/ builds
+        # so History detail + PDF export find every field they expect.
+        analysis_payload = {
+            k: data.get(k)
+            for k in (
+                'image_stage_probabilities',
+                'image_stage_top_class',
+                'image_stage_top_confidence',
+                'yolo_detected',
+                'yolo_confidence',
+                'crop_preview_data_url',
+                'xai',
+                'pipeline',
+                'tips',
+                'weather',
+            )
+            if data.get(k) is not None
+        }
+
+        diagnosis = DiagnosisResult(
+            user=request.user,
+            farm=farm,
+            disease_name=disease_name,
+            confidence=confidence,
+            source='ai',
+            status=status_label,
+            all_probabilities=data.get('all_probabilities') or {},
+            analysis_payload=analysis_payload,
+        )
+
+        image_url = data.get('image_data_url')
+        image_filename = (data.get('image_filename') or 'diagnosis.jpg').strip()
+        if isinstance(image_url, str) and image_url.startswith('data:image'):
+            try:
+                header, b64 = image_url.split(',', 1)
+                ext = 'jpg'
+                if 'image/png' in header:
+                    ext = 'png'
+                img_bytes = base64.b64decode(b64)
+                safe_name = image_filename if '.' in image_filename else f'{image_filename}.{ext}'
+                diagnosis.image.save(
+                    safe_name,
+                    ContentFile(img_bytes),
+                    save=False,
+                )
+            except Exception as exc:
+                logger.warning('image decode failed: %s', exc)
+
+        try:
+            diagnosis.save()
+        except Exception as exc:
+            logger.error('Failed to save image diagnosis: %s', exc)
+            return Response(
+                {'error': f'Failed to save: {exc}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                'id': diagnosis.id,
+                'created_at': diagnosis.created_at.isoformat(),
+                'disease_name': diagnosis.disease_name,
+                'confidence': diagnosis.confidence,
+                'source': diagnosis.source,
+                'status': diagnosis.status,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class SaveVideoDiagnosisView(APIView):
     """
     POST /api/save-video-diagnosis/

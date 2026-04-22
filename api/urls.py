@@ -1,7 +1,8 @@
 from django.urls import path
 
 from .views import (
-    HealthView, DiagnoseView, VideoDiagnoseView, SaveVideoDiagnosisView,
+    HealthView, DiagnoseView, VideoDiagnoseView,
+    SaveImageDiagnosisView, SaveVideoDiagnosisView,
     HistoryView, HistoryDetailView, ProfileView,
     FeedCalculatorView, SupplierListView, SupplierDetailView,
     ExpertListView, ExpertDetailView, ChatRoomListCreateView, ChatMessageListCreateView,
@@ -20,6 +21,7 @@ urlpatterns = [
     path('profile/', ProfileView.as_view(), name='profile'),
     path('diagnose/', DiagnoseView.as_view(), name='diagnose'),
     path('diagnose-video/', VideoDiagnoseView.as_view(), name='diagnose-video'),
+    path('save-image-diagnosis/', SaveImageDiagnosisView.as_view(), name='save-image-diagnosis'),
     path('save-video-diagnosis/', SaveVideoDiagnosisView.as_view(), name='save-video-diagnosis'),
     path('history/', HistoryView.as_view(), name='history'),
     path('history/<int:pk>/', HistoryDetailView.as_view(), name='history-detail'),
