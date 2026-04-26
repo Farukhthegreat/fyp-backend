@@ -38,3 +38,31 @@ def send_fcm_notification(fcm_token, title, body, data=None):
     except Exception as e:
         # Never let notification failure break the main request
         logger.warning(f'FCM notification failed: {e}')
+
+
+def send_fcm_topic(topic, title, body, data=None):
+    """Broadcast a notification to every device subscribed to a topic.
+
+    Topic-based fan-out is the right primitive for daily-brief style
+    pushes: one Firebase API call reaches every farmer subscribed to
+    `daily_brief` instead of one call per token. Failure is swallowed so
+    a transient FCM hiccup never breaks the cron loop.
+    """
+    if not topic or not topic.strip():
+        return
+    message = messaging.Message(
+        notification=messaging.Notification(title=title, body=body),
+        data={k: str(v) for k, v in (data or {}).items()},
+        topic=topic.strip(),
+        android=messaging.AndroidConfig(
+            priority='high',
+            notification=messaging.AndroidNotification(
+                sound='default',
+                channel_id='aviansense_alerts',
+            ),
+        ),
+    )
+    try:
+        messaging.send(message)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f'FCM topic broadcast failed: {e}')
