@@ -300,29 +300,38 @@ class ChatbotView(APIView):
 
 
 _XAI_SYSTEM = (
-    "You are an expert poultry veterinarian writing a short XAI "
-    "(Explainable AI) note for a Pakistani farmer. An image classifier "
-    "predicted a disease class from a photo of chicken faeces. Your job: "
-    "explain the visual evidence that supports this class. Describe what "
-    "you actually see in the image — colour, texture, consistency, blood "
-    "traces, mucus, white/chalky streaks, frothy appearance, shape, "
-    "undigested feed, or other patterns. Tie each observation to the "
-    "predicted class. If the prediction is Healthy, say why the sample "
-    "looks normal (brown/green, solid, no blood, moderate size). Never "
-    "invent symptoms not visible in the image. Keep it grounded.\n\n"
+    "You are an expert poultry veterinarian helping a Pakistani farmer.\n"
+    "An image classifier predicted a disease class from a photo of chicken "
+    "faeces. The farmer asked for transparency. Produce TWO outputs in a "
+    "single STRICT JSON object — nothing else.\n\n"
+    "Schema:\n"
+    "{\n"
+    '  "explanation": "<60-120 words: visible evidence supporting the '
+    'class, 2-3 bullet-style observations prefixed with - , ending with '
+    'one line on what this means for the flock>",\n'
+    '  "farmer_note": "<2 short sentences for an action log: '
+    'plain-language diagnosis line + the single most urgent next step. '
+    'Mention the drug name + dosing window only when applicable.>"\n'
+    "}\n\n"
     "RULES:\n"
-    "- Reply in the SAME language the farmer asked in (Urdu or English).\n"
-    "- 60-120 words. Short sentences.\n"
-    "- No markdown. No asterisks, underscores, or headings.\n"
-    "- Structure: 1 sentence on visible evidence; 2-3 specific bullet-"
-    "style observations each tied to the prediction; 1 sentence on what "
-    "this means for the flock.\n"
-    "- Prefix each bullet with '- '.\n"
-    "- Don't quote probabilities back at the farmer. Don't say 'the AI' "
-    "or 'the model'. Speak as if you examined the sample yourself.\n"
-    "- If the image clearly does not match the predicted class (e.g. "
-    "predicted 'Coccidiosis' but no blood visible), say so honestly — "
-    "transparency is the goal."
+    "- Both fields use the SAME language the farmer asked in (Urdu or "
+    "English).\n"
+    "- Describe what you actually see in the image — colour, texture, "
+    "consistency, blood traces, mucus, chalky streaks, frothy appearance, "
+    "shape, undigested feed. Never invent symptoms not visible.\n"
+    "- If the prediction is Healthy, say why the sample looks normal "
+    "(brown/green, solid, moderate size, no blood). farmer_note should "
+    "tell them to keep monitoring.\n"
+    "- If the image clearly does NOT match the predicted class, say so "
+    "honestly in explanation; farmer_note should suggest a retake.\n"
+    "- No markdown. No asterisks, underscores, headings, code fences. "
+    "Plain text only inside the JSON strings.\n"
+    "- Don't quote probabilities back. Don't say 'the AI' or 'the model'. "
+    "Speak as if you examined the sample yourself.\n"
+    "- farmer_note must be short and concrete (under 220 characters). "
+    "It is auto-filled into the farmer's Notes field, so it has to read "
+    "like a vet's quick log entry, not a generic disclaimer.\n"
+    "- Return ONLY the JSON. No prose before or after."
 )
 
 
@@ -433,17 +442,48 @@ class XaiExplainView(APIView):
                     system_instruction=_XAI_SYSTEM,
                     temperature=0.4,
                     top_p=0.9,
-                    max_output_tokens=420,
+                    max_output_tokens=520,
+                    response_mime_type='application/json',
                 ),
             )
-            explanation = (getattr(response, 'text', None) or '').strip()
+            raw = (getattr(response, 'text', None) or '').strip()
+            if not raw:
+                return Response(
+                    {'error': 'empty_reply'},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+            # Gemini occasionally wraps the JSON in a code fence even with
+            # response_mime_type set, so trim defensively before parsing.
+            raw = raw.strip()
+            if raw.startswith('```'):
+                raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
+                raw = re.sub(r'\n?```\s*$', '', raw)
+            explanation = ''
+            farmer_note = ''
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    explanation = str(parsed.get('explanation') or '').strip()
+                    farmer_note = str(parsed.get('farmer_note') or '').strip()
+            except ValueError:
+                # Backwards-compatible fallback — older clients still
+                # render the explanation only, so don't 500 if the model
+                # slips back into prose. Treat the entire body as the
+                # explanation in that case.
+                explanation = raw
+
             if not explanation:
                 return Response(
                     {'error': 'empty_reply'},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
             explanation = _strip_markdown(explanation)
-            return Response({'explanation': explanation, 'language': language})
+            farmer_note = _strip_markdown(farmer_note) if farmer_note else ''
+            return Response({
+                'explanation': explanation,
+                'farmer_note': farmer_note,
+                'language': language,
+            })
         except Exception as e:  # noqa: BLE001
             logger.exception('Gemini XAI call failed')
             return Response(

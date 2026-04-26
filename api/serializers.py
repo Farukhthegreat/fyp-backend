@@ -270,7 +270,8 @@ class DailyTaskSerializer(serializers.ModelSerializer):
 class ArticleListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Article
-        fields = ['id', 'title', 'title_ur', 'category', 'image_url', 'created_at']
+        fields = ['id', 'title', 'title_ur', 'category', 'image_url',
+                  'is_auto_generated', 'created_at']
 
 
 class ArticleDetailSerializer(serializers.ModelSerializer):
@@ -278,7 +279,7 @@ class ArticleDetailSerializer(serializers.ModelSerializer):
         model = Article
         fields = [
             'id', 'title', 'title_ur', 'content', 'content_ur',
-            'category', 'image_url', 'created_at',
+            'category', 'image_url', 'is_auto_generated', 'created_at',
         ]
 
 

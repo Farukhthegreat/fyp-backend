@@ -186,6 +186,11 @@ class Article(models.Model):
     category = models.CharField(max_length=20, choices=ARTICLE_CATEGORIES)
     image_url = models.URLField(blank=True, default='')
     is_published = models.BooleanField(default=True)
+    # Auto-generated daily tips fired by the run_daily_jobs cron. Tagged
+    # so the mobile client can pin them as "Today's Tip" without
+    # confusing them with hand-curated articles, and so we can purge
+    # older auto rows on a TTL without touching curated content.
+    is_auto_generated = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
