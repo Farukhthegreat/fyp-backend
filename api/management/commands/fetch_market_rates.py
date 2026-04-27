@@ -133,12 +133,25 @@ def find_latest_punjab_image() -> Optional[tuple[str, str]]:
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9,ur;q=0.8',
     }
-    try:
-        r = requests.get(PUNJAB_LIST_URL, timeout=15, headers=headers)
-    except Exception as exc:  # noqa: BLE001
-        print(f'  [PUNJAB] listing fetch raised: {exc}', flush=True)
-        return None
-    if r.status_code != 200:
+    # Retry pattern handles the case where Punjab gov is slow to respond
+    # to the first request from a cold connection. We also try a bare
+    # GET (no User-Agent) as the second attempt — some Drupal hosts
+    # CF-block aggressive crawler UAs but allow plain `python-requests`.
+    r = None
+    last_exc = None
+    for attempt, hdrs in enumerate([headers, {'User-Agent': 'python-requests/2'}]):
+        try:
+            r = requests.get(PUNJAB_LIST_URL, timeout=45, headers=hdrs)
+            if r.status_code == 200:
+                break
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            print(f'  [PUNJAB] listing attempt {attempt + 1} raised: {exc}', flush=True)
+            r = None
+            continue
+    if r is None or r.status_code != 200:
+        if last_exc is not None and r is None:
+            return None
         print(f'  [PUNJAB] listing HTTP {r.status_code} (len={len(r.text)})', flush=True)
         return None
 
