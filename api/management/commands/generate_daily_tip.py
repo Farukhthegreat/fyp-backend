@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import time
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
@@ -48,14 +49,26 @@ _CATEGORY_BY_SEASON = {
 
 
 _GEMINI_FALLBACK_MODELS = (
-    'gemini-2.0-flash-lite',
     'gemini-3.1-flash-lite-preview',
     'gemini-3-flash-preview',
+    'gemini-2.5-pro',
     'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
-    'gemini-2.5-pro',
 )
+
+_QUOTA_COOLDOWN_SECONDS = int(os.environ.get('GEMINI_QUOTA_COOLDOWN', '900'))
+_EXHAUSTED_UNTIL: dict[str, float] = {}
+
+
+def _is_exhausted(model: str) -> bool:
+    expiry = _EXHAUSTED_UNTIL.get(model)
+    return expiry is not None and time.time() < expiry
+
+
+def _mark_exhausted(model: str) -> None:
+    _EXHAUSTED_UNTIL[model] = time.time() + _QUOTA_COOLDOWN_SECONDS
 
 
 def _ensure_client():
@@ -74,25 +87,32 @@ def _gen_with_fallback(client, contents, config):
     """Walk the fallback chain on transient 503/UNAVAILABLE errors."""
     last_exc = None
     for model in _GEMINI_FALLBACK_MODELS:
+        if _is_exhausted(model):
+            continue
         try:
             return client.models.generate_content(
                 model=model, contents=contents, config=config,
             )
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
+            quota_hit = (
+                ' 429 ' in f' {msg} '
+                or 'RESOURCE_EXHAUSTED' in msg
+                or 'quota' in msg.lower()
+            )
             transient = (
                 ' 503 ' in f' {msg} '
                 or 'UNAVAILABLE' in msg
                 or '500 INTERNAL' in msg
                 or 'overloaded' in msg.lower()
-                or ' 429 ' in f' {msg} '
-                or 'RESOURCE_EXHAUSTED' in msg
-                or 'quota' in msg.lower()
+                or quota_hit
                 or ' 404 ' in f' {msg} '
                 or 'NOT_FOUND' in msg
                 or 'is not found' in msg.lower()
                 or 'INVALID_ARGUMENT' in msg
             )
+            if quota_hit:
+                _mark_exhausted(model)
             last_exc = exc
             if not transient:
                 raise

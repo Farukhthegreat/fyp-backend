@@ -15,6 +15,7 @@ grpcio-status on Render.
 import logging
 import os
 import re
+import time
 
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -73,21 +74,41 @@ _MD_BACKTICK = re.compile(r'`([^`]+)`')
 
 
 # Gemini model fallback chain. Each entry has its own free-tier quota
-# bucket, so a 429 on one model does not block the next. Order favours
-# stable models with fresh daily quota first, then 3.x previews (also
-# untouched on most days), then the standard 2.5 line that we've been
-# burning. 2.5-pro sits at the tail as the highest-quality lifeline.
-# Verified against `models.list` on the project's API key — preview
-# names need the `-preview` suffix or the API returns 404.
+# bucket, so a 429 on one model does not block the next. Defense-day
+# ordering puts the freshest, least-touched buckets first (3.x previews
+# and 2.5-pro) so chat answers fast even when the workhorse 2.5/2.0
+# tiers are exhausted from earlier traffic. Verified against
+# `models.list` on the project's API key — preview names need the
+# `-preview` suffix or the API returns 404.
 _GEMINI_FALLBACK_MODELS = (
-    'gemini-2.0-flash-lite',
     'gemini-3.1-flash-lite-preview',
     'gemini-3-flash-preview',
+    'gemini-2.5-pro',
     'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
-    'gemini-2.5-pro',
 )
+
+# Per-model "exhausted until" cache. When a model returns 429 /
+# RESOURCE_EXHAUSTED we record a cooldown timestamp and the fallback
+# walker skips it on subsequent calls until the cooldown expires.
+# This eliminates wasted retries through known-dead models — the
+# difference between a 15s response (walking past 3 dead models) and
+# a sub-2s response that goes straight to the live one. Cooldown is
+# kept short so a quota reset is picked up automatically without a
+# server restart.
+_QUOTA_COOLDOWN_SECONDS = int(os.environ.get('GEMINI_QUOTA_COOLDOWN', '900'))
+_EXHAUSTED_UNTIL: dict[str, float] = {}
+
+
+def _is_exhausted(model: str) -> bool:
+    expiry = _EXHAUSTED_UNTIL.get(model)
+    return expiry is not None and time.time() < expiry
+
+
+def _mark_exhausted(model: str) -> None:
+    _EXHAUSTED_UNTIL[model] = time.time() + _QUOTA_COOLDOWN_SECONDS
 
 
 def _generate_with_fallback(*, contents, config):
@@ -98,6 +119,8 @@ def _generate_with_fallback(*, contents, config):
     """
     last_exc = None
     for model in _GEMINI_FALLBACK_MODELS:
+        if _is_exhausted(model):
+            continue
         try:
             return _CLIENT.models.generate_content(
                 model=model,
@@ -106,18 +129,17 @@ def _generate_with_fallback(*, contents, config):
             ), model
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
+            quota_hit = (
+                ' 429 ' in f' {msg} '
+                or 'RESOURCE_EXHAUSTED' in msg
+                or 'quota' in msg.lower()
+            )
             transient = (
                 ' 503 ' in f' {msg} '
                 or 'UNAVAILABLE' in msg
                 or '500 INTERNAL' in msg
                 or 'overloaded' in msg.lower()
-                # 429 RESOURCE_EXHAUSTED — per-model free-tier daily
-                # quota. Each model has its own bucket on the free
-                # tier, so flipping to the next one in the chain is
-                # a free recovery path until the user upgrades.
-                or ' 429 ' in f' {msg} '
-                or 'RESOURCE_EXHAUSTED' in msg
-                or 'quota' in msg.lower()
+                or quota_hit
                 # 404 NOT_FOUND / INVALID_ARGUMENT happen when a
                 # preview model is renamed or retired. Skip the dead
                 # name and let the chain reach a stable fallback
@@ -127,6 +149,8 @@ def _generate_with_fallback(*, contents, config):
                 or 'is not found' in msg.lower()
                 or 'INVALID_ARGUMENT' in msg
             )
+            if quota_hit:
+                _mark_exhausted(model)
             last_exc = exc
             if not transient:
                 raise

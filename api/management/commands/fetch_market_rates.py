@@ -32,6 +32,7 @@ import json
 import os
 import random
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 from urllib.parse import urljoin
@@ -374,20 +375,24 @@ def gemini_extract_rates(image_bytes: bytes) -> Optional[dict]:
         "egg_dozen 180-320."
     )
     fallback_models = (
-        'gemini-2.0-flash-lite',
         'gemini-3.1-flash-lite-preview',
         'gemini-3-flash-preview',
+        'gemini-2.5-pro',
         'gemini-2.0-flash',
+        'gemini-2.0-flash-lite',
         'gemini-2.5-flash-lite',
         'gemini-2.5-flash',
-        'gemini-2.5-pro',
     )
     last_exc = None
     try:
         client = genai.Client(api_key=api_key)
     except Exception:
         return None
+    cooldown = int(os.environ.get('GEMINI_QUOTA_COOLDOWN', '900'))
+    exhausted = getattr(gemini_extract_rates, '_exhausted_until', {})
     for model in fallback_models:
+        if exhausted.get(model, 0) > time.time():
+            continue
         try:
             resp = client.models.generate_content(
                 model=model,
@@ -436,13 +441,17 @@ def gemini_extract_rates(image_bytes: bytes) -> Optional[dict]:
             return None
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
+            quota_hit = ('429' in msg or 'RESOURCE_EXHAUSTED' in msg
+                         or 'quota' in msg.lower())
             transient = ('503' in msg or 'UNAVAILABLE' in msg or '500 INTERNAL' in msg
                          or 'overloaded' in msg.lower()
-                         or '429' in msg or 'RESOURCE_EXHAUSTED' in msg
-                         or 'quota' in msg.lower()
+                         or quota_hit
                          or '404' in msg or 'NOT_FOUND' in msg
                          or 'is not found' in msg.lower()
                          or 'INVALID_ARGUMENT' in msg)
+            if quota_hit:
+                exhausted[model] = time.time() + cooldown
+                gemini_extract_rates._exhausted_until = exhausted  # type: ignore[attr-defined]
             last_exc = exc
             if not transient:
                 return None
