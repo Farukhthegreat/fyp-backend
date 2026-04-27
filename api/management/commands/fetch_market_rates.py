@@ -97,7 +97,20 @@ class MarketRate:
 # Punjab govt scraper (primary)
 # ---------------------------------------------------------------------------
 
-PUNJAB_LIST_URL = 'https://lahore.punjab.gov.pk/poultry-rate-list'
+# Punjab govt site is geo-blocked from Render's US/EU egress IPs (TCP
+# connect times out after 45s on every attempt). Route through a
+# Cloudflare Worker that proxies the path 1:1 — CF has Pakistani edge
+# nodes that can reach the gov server. Override via env var if the
+# worker URL changes.
+PUNJAB_PROXY_BASE = os.getenv(
+    'PUNJAB_PROXY_BASE',
+    'https://aviansense-punjab-proxy.farrukhyousaf1.workers.dev',
+).rstrip('/')
+PUNJAB_LIST_URL = f'{PUNJAB_PROXY_BASE}/poultry-rate-list'
+# Source-of-truth host that lives behind the proxy. Used to rewrite
+# any absolute /system/files URLs the listing page emits so image
+# fetches also flow through the worker.
+PUNJAB_DIRECT_HOST = 'lahore.punjab.gov.pk'
 
 # OCR.space free endpoint — no key needed for helloworld tier.
 # Users can register their own free key at ocr.space/ocrapi (25k req/month).
@@ -161,6 +174,20 @@ def find_latest_punjab_image() -> Optional[tuple[str, str]]:
     soup = BeautifulSoup(html, 'html.parser')
     date_re = re.compile(r'^\s*[A-Za-z]+\s+\d{1,2},\s+\d{4}\s*$')
 
+    def _route(href: str) -> str:
+        """Force every URL we extract back through the proxy host so
+        the subsequent image fetch doesn't try to hit lahore.punjab.gov.pk
+        directly (which Render still can't reach)."""
+        full = urljoin(PUNJAB_LIST_URL, href)
+        # Rewrite any absolute references to the upstream host onto the
+        # proxy. Relative paths already resolve under the proxy via
+        # urljoin against PUNJAB_LIST_URL.
+        return re.sub(
+            r'https?://' + re.escape(PUNJAB_DIRECT_HOST),
+            PUNJAB_PROXY_BASE,
+            full,
+        )
+
     # Strategy 1 — original <tr> table layout.
     for row in soup.find_all('tr'):
         tds = row.find_all('td')
@@ -172,9 +199,8 @@ def find_latest_punjab_image() -> Optional[tuple[str, str]]:
         link = tds[1].find('a', href=True)
         if not link:
             continue
-        full_url = urljoin(PUNJAB_LIST_URL, link['href'])
         print('  [PUNJAB] listing matched via <tr> table', flush=True)
-        return (full_url, date_text)
+        return (_route(link['href']), date_text)
 
     # Strategy 2 — Drupal views-row layout. Each row is a div carrying
     # the date in one child and the View link in another.
@@ -184,9 +210,8 @@ def find_latest_punjab_image() -> Optional[tuple[str, str]]:
         link = row.find('a', href=True)
         if not m_date or not link:
             continue
-        full_url = urljoin(PUNJAB_LIST_URL, link['href'])
         print('  [PUNJAB] listing matched via .views-row', flush=True)
-        return (full_url, m_date.group(0))
+        return (_route(link['href']), m_date.group(0))
 
     # Strategy 3 — raw regex over the HTML. Picks the first POULTRY_*
     # image link we can find and the nearest preceding date string.
@@ -197,12 +222,11 @@ def find_latest_punjab_image() -> Optional[tuple[str, str]]:
     )
     if img_match:
         href = img_match.group(1)
-        full_url = urljoin(PUNJAB_LIST_URL, href)
         before = html[: img_match.start()]
         date_match = list(re.finditer(r'[A-Za-z]+\s+\d{1,2},\s+\d{4}', before))
         date_text = date_match[-1].group(0) if date_match else ''
         print('  [PUNJAB] listing matched via raw regex', flush=True)
-        return (full_url, date_text)
+        return (_route(href), date_text)
 
     print('  [PUNJAB] no rate-image link found in any layout', flush=True)
     return None
