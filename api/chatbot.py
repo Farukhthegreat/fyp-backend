@@ -72,17 +72,21 @@ _MD_HEADING = re.compile(r'^\s{0,3}#{1,6}\s+', re.MULTILINE)
 _MD_BACKTICK = re.compile(r'`([^`]+)`')
 
 
-# Gemini model fallback chain. Free-tier RPD limits drove the order:
-# 2.5-flash-lite has 250 RPD vs 2.5-flash's 20 RPD, so making it the
-# primary stops us from burning the small 2.5-flash bucket on chat /
-# brief / tip traffic. 2.0-flash sits second as a 200 RPD backup, and
-# 2.5-flash stays last as a higher-quality lifeline once the cheaper
-# tiers exhaust. Each model has its own quota bucket so a 429 on one
-# does not block the next.
+# Gemini model fallback chain. Each entry has its own free-tier quota
+# bucket, so a 429 on one model does not block the next. Order favours
+# stable models with fresh daily quota first, then 3.x previews (also
+# untouched on most days), then the standard 2.5 line that we've been
+# burning. 2.5-pro sits at the tail as the highest-quality lifeline.
+# Verified against `models.list` on the project's API key — preview
+# names need the `-preview` suffix or the API returns 404.
 _GEMINI_FALLBACK_MODELS = (
-    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash-lite',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-3-flash-preview',
     'gemini-2.0-flash',
+    'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
+    'gemini-2.5-pro',
 )
 
 
@@ -114,6 +118,14 @@ def _generate_with_fallback(*, contents, config):
                 or ' 429 ' in f' {msg} '
                 or 'RESOURCE_EXHAUSTED' in msg
                 or 'quota' in msg.lower()
+                # 404 NOT_FOUND / INVALID_ARGUMENT happen when a
+                # preview model is renamed or retired. Skip the dead
+                # name and let the chain reach a stable fallback
+                # instead of crashing the whole request.
+                or ' 404 ' in f' {msg} '
+                or 'NOT_FOUND' in msg
+                or 'is not found' in msg.lower()
+                or 'INVALID_ARGUMENT' in msg
             )
             last_exc = exc
             if not transient:

@@ -373,7 +373,15 @@ def gemini_extract_rates(image_bytes: bytes) -> Optional[dict]:
         "live_retail 280-700, meat 350-900, egg_peti 5000-12000, "
         "egg_dozen 180-320."
     )
-    fallback_models = ('gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-flash')
+    fallback_models = (
+        'gemini-2.0-flash-lite',
+        'gemini-3.1-flash-lite-preview',
+        'gemini-3-flash-preview',
+        'gemini-2.0-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-2.5-pro',
+    )
     last_exc = None
     try:
         client = genai.Client(api_key=api_key)
@@ -431,7 +439,10 @@ def gemini_extract_rates(image_bytes: bytes) -> Optional[dict]:
             transient = ('503' in msg or 'UNAVAILABLE' in msg or '500 INTERNAL' in msg
                          or 'overloaded' in msg.lower()
                          or '429' in msg or 'RESOURCE_EXHAUSTED' in msg
-                         or 'quota' in msg.lower())
+                         or 'quota' in msg.lower()
+                         or '404' in msg or 'NOT_FOUND' in msg
+                         or 'is not found' in msg.lower()
+                         or 'INVALID_ARGUMENT' in msg)
             last_exc = exc
             if not transient:
                 return None
