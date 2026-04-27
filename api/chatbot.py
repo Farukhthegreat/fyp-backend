@@ -106,6 +106,13 @@ def _generate_with_fallback(*, contents, config):
                 or 'UNAVAILABLE' in msg
                 or '500 INTERNAL' in msg
                 or 'overloaded' in msg.lower()
+                # 429 RESOURCE_EXHAUSTED — per-model free-tier daily
+                # quota. Each model has its own bucket on the free
+                # tier, so flipping to the next one in the chain is
+                # a free recovery path until the user upgrades.
+                or ' 429 ' in f' {msg} '
+                or 'RESOURCE_EXHAUSTED' in msg
+                or 'quota' in msg.lower()
             )
             last_exc = exc
             if not transient:
