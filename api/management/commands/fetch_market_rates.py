@@ -255,27 +255,143 @@ def parse_punjab_rates(text: str) -> Optional[dict]:
     }
 
 
+def gemini_extract_rates(image_bytes: bytes) -> Optional[dict]:
+    """Ask Gemini Vision to read the rate image directly.
+
+    The Punjab Market Committee JPEG is a stable 6-row table — Gemini
+    extracts the printed numbers far more reliably than OCR.space's
+    free tier (which often rate-limits the shared `helloworld` key
+    and returns truncated text). Falls through to None when no Gemini
+    key is configured or all fallback models are 503 — the caller
+    then drops to OCR.space.
+    """
+    api_key = os.getenv('GEMINI_API_KEY', '').strip()
+    if not api_key:
+        return None
+    try:
+        from google import genai
+        from google.genai import types as genai_types
+    except Exception:
+        return None
+
+    prompt = (
+        "Extract the six poultry prices from this Punjab Market Committee "
+        "rate image. The image lists, in order: Farm Gate live (PKR/kg), "
+        "Broiler Live Thok (PKR/kg), Broiler Live Parchoon retail "
+        "(PKR/kg), Broiler Meat Parchoon (PKR/kg), Egg Peti wholesale "
+        "(PKR per peti = 360 eggs), Egg per Dozen (PKR per 12).\n\n"
+        "Return STRICT JSON, no other text. Keys: farm_gate, live_thok, "
+        "live_retail, meat, egg_peti, egg_dozen. Each value is an integer "
+        "in PKR. Reasonable ranges: farm_gate 250-700, live_thok 250-700, "
+        "live_retail 280-700, meat 350-900, egg_peti 5000-12000, "
+        "egg_dozen 180-320."
+    )
+    fallback_models = ('gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash')
+    last_exc = None
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception:
+        return None
+    for model in fallback_models:
+        try:
+            resp = client.models.generate_content(
+                model=model,
+                contents=[
+                    genai_types.Content(
+                        role='user',
+                        parts=[
+                            genai_types.Part.from_bytes(
+                                data=image_bytes, mime_type='image/jpeg',
+                            ),
+                            genai_types.Part.from_text(text=prompt),
+                        ],
+                    ),
+                ],
+                config=genai_types.GenerateContentConfig(
+                    temperature=0.0,
+                    max_output_tokens=300,
+                ),
+            )
+            raw = (getattr(resp, 'text', None) or '').strip()
+            if not raw:
+                continue
+            if raw.startswith('```'):
+                raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
+                raw = re.sub(r'\n?```\s*$', '', raw)
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                m = re.search(r'\{[\s\S]*\}', raw)
+                if not m:
+                    continue
+                data = json.loads(m.group(0))
+            if not isinstance(data, dict):
+                continue
+            keys = ('farm_gate', 'live_thok', 'live_retail', 'meat', 'egg_peti', 'egg_dozen')
+            out = {}
+            for k in keys:
+                v = data.get(k)
+                if isinstance(v, str):
+                    v = re.sub(r'[^0-9]', '', v) or None
+                    v = int(v) if v else None
+                if isinstance(v, (int, float)):
+                    out[k] = int(v)
+            if all(k in out for k in keys):
+                return out
+            return None
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            transient = ('503' in msg or 'UNAVAILABLE' in msg or '500 INTERNAL' in msg
+                         or 'overloaded' in msg.lower())
+            last_exc = exc
+            if not transient:
+                return None
+            continue
+    return None if last_exc else None
+
+
 def scrape_punjab_gov() -> Optional[dict]:
     """Top-level Punjab scraper — returns parsed rates + metadata."""
     latest = find_latest_punjab_image()
     if not latest:
+        print('  [PUNJAB] no image found on listing page', flush=True)
         return None
     image_url, date_text = latest
     try:
         img = requests.get(image_url, timeout=15, headers={'User-Agent': USER_AGENT})
         if img.status_code != 200:
+            print(f'  [PUNJAB] image fetch HTTP {img.status_code}', flush=True)
             return None
+
+        # Try Gemini Vision first — same API key user already pays for,
+        # no shared rate limit, far more accurate on the Urdu/English
+        # mixed table than OCR.space's free engine.
+        parsed = gemini_extract_rates(img.content)
+        if parsed:
+            print('  [PUNJAB] extracted via Gemini Vision', flush=True)
+            return {
+                **parsed,
+                'image_url': image_url,
+                'source_date': date_text,
+                'ocr_text_preview': 'gemini_vision',
+            }
+
+        # OCR.space fallback (only if Gemini missing/busy).
         text = ocr_space_parse(img.content)
         if not text:
+            print('  [PUNJAB] OCR.space returned empty', flush=True)
             return None
         parsed = parse_punjab_rates(text)
         if not parsed:
+            print('  [PUNJAB] OCR.space text could not be parsed', flush=True)
             return None
         parsed['image_url'] = image_url
         parsed['source_date'] = date_text
         parsed['ocr_text_preview'] = text[:400]
+        print('  [PUNJAB] extracted via OCR.space', flush=True)
         return parsed
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        print(f'  [PUNJAB] scrape exception: {exc}', flush=True)
         return None
 
 
