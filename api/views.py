@@ -784,9 +784,23 @@ class TaskSummaryView(APIView):
         farm = Farm.objects.filter(user=request.user).first()
         flock_size = farm.flock_size if farm else 0
 
+        # Match the season filter in TaskListView so the dashboard's
+        # "x / total" denominator stays in lockstep with the list the
+        # user actually sees on the Tasks screen — previously summary
+        # counted all 10 seeded tasks while the list screen rendered
+        # only the 7 that match today's season.
+        current_month = today.month
+        if current_month in [6, 7, 8]:
+            season = 'summer'
+        elif current_month in [12, 1, 2]:
+            season = 'winter'
+        else:
+            season = 'spring'
+
         eligible_tasks = DailyTask.objects.filter(
             is_active=True,
             min_flock_size__lte=flock_size,
+            season__in=[season, 'all'],
         )
         total = eligible_tasks.count()
         completed = TaskCompletion.objects.filter(
