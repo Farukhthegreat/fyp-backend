@@ -72,6 +72,53 @@ _MD_HEADING = re.compile(r'^\s{0,3}#{1,6}\s+', re.MULTILINE)
 _MD_BACKTICK = re.compile(r'`([^`]+)`')
 
 
+# Gemini model fallback chain. gemini-2.5-flash is the headline model
+# but its free-tier slot regularly returns 503 UNAVAILABLE during the
+# Pakistan evening surge — we retry the same call against quieter
+# models in order. flash-lite is cheaper and far less contended;
+# gemini-2.0-flash is a stable older sibling. Order matters: best
+# quality first, broadest availability last.
+_GEMINI_FALLBACK_MODELS = (
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash',
+)
+
+
+def _generate_with_fallback(*, contents, config):
+    """Call generate_content against each model in order until one
+    doesn't raise a transient `5xx UNAVAILABLE` error. Other exceptions
+    bubble up immediately so genuine bugs (auth, schema, quota-exhaust)
+    aren't masked. Returns the first successful response object.
+    """
+    last_exc = None
+    for model in _GEMINI_FALLBACK_MODELS:
+        try:
+            return _CLIENT.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+            ), model
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            transient = (
+                ' 503 ' in f' {msg} '
+                or 'UNAVAILABLE' in msg
+                or '500 INTERNAL' in msg
+                or 'overloaded' in msg.lower()
+            )
+            last_exc = exc
+            if not transient:
+                raise
+            logger.warning(
+                'Gemini %s unavailable (%s) — falling back', model, msg[:160],
+            )
+            continue
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError('No Gemini fallback succeeded')
+
+
 def _strip_markdown(text: str) -> str:
     if not text:
         return text
@@ -248,11 +295,10 @@ class ChatbotView(APIView):
         )
 
         try:
-            # gemini-2.5-flash has the best free-tier RPD (1500/day) and
-            # strong Urdu support. flash-lite is faster but weaker; pro is
-            # overkill and counted against a much lower daily cap.
-            response = _CLIENT.models.generate_content(
-                model='gemini-2.5-flash',
+            # 2.5-flash is the headline model but its free-tier slot is
+            # often 503 during peak hours; _generate_with_fallback walks
+            # to flash-lite then 2.0-flash so chats keep working.
+            response, _model = _generate_with_fallback(
                 contents=contents,
                 config=_GENAI_TYPES.GenerateContentConfig(
                     system_instruction=system_prompt,
@@ -420,8 +466,7 @@ class XaiExplainView(APIView):
             # system instruction when an image is attached, which was
             # producing empty .text responses on every XAI call.
             full_prompt = f"{_XAI_SYSTEM}\n\n{user_text}"
-            response = _CLIENT.models.generate_content(
-                model='gemini-2.5-flash',
+            response, _model = _generate_with_fallback(
                 contents=[
                     _GENAI_TYPES.Content(
                         role='user',

@@ -47,6 +47,13 @@ _CATEGORY_BY_SEASON = {
 }
 
 
+_GEMINI_FALLBACK_MODELS = (
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash',
+)
+
+
 def _ensure_client():
     api_key = os.environ.get('GEMINI_API_KEY', '').strip()
     if not api_key:
@@ -57,6 +64,32 @@ def _ensure_client():
         return genai.Client(api_key=api_key), genai_types, None
     except Exception as exc:  # noqa: BLE001
         return None, None, f'genai init failed: {exc}'
+
+
+def _gen_with_fallback(client, contents, config):
+    """Walk the fallback chain on transient 503/UNAVAILABLE errors."""
+    last_exc = None
+    for model in _GEMINI_FALLBACK_MODELS:
+        try:
+            return client.models.generate_content(
+                model=model, contents=contents, config=config,
+            )
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            transient = (
+                ' 503 ' in f' {msg} '
+                or 'UNAVAILABLE' in msg
+                or '500 INTERNAL' in msg
+                or 'overloaded' in msg.lower()
+            )
+            last_exc = exc
+            if not transient:
+                raise
+            logger.warning('Gemini %s busy, trying next model', model)
+            continue
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError('No Gemini fallback succeeded')
 
 
 def _strip_markdown(text: str) -> str:
@@ -104,8 +137,8 @@ def call_gemini(today: dt.date, season: str, category: str) -> dict | None:
         return None
     prompt = _build_prompt(today, season, category)
     try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
+        response = _gen_with_fallback(
+            client,
             contents=[
                 types.Content(
                     role='user',
