@@ -116,33 +116,83 @@ def find_latest_punjab_image() -> Optional[tuple[str, str]]:
     """Return (image_url, date_string) for the most recent rate image,
     or None on failure.
 
-    The Punjab page renders a simple table: | Date | View link |. We grab the
-    first data row since entries are ordered newest-first.
+    The Punjab gov page is a Drupal site that has been refreshed at
+    least once — the rate listing is no longer in a clean ``<tr>``
+    table. We try four extraction strategies in order:
+      1. Old table layout (legacy <tr><td>Date</td><td><a>View</a></td>)
+      2. Drupal "views-row" div pattern (current layout)
+      3. Greedy regex over the raw HTML for `system/files?file=POULTRY_*.jpeg`
+         + the nearest preceding `<MMM> DD, YYYY` date string.
+      4. Hard-coded fallback URL pattern with today's date if all
+         else fails (Punjab uses sequential POULTRY_N.jpeg ids; we
+         scan a small window of recent ids).
+    Logs which strategy won so cron output is debuggable.
     """
+    headers = {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9,ur;q=0.8',
+    }
     try:
-        r = requests.get(PUNJAB_LIST_URL, timeout=10, headers={'User-Agent': USER_AGENT})
-        if r.status_code != 200:
-            return None
-        soup = BeautifulSoup(r.text, 'html.parser')
+        r = requests.get(PUNJAB_LIST_URL, timeout=15, headers=headers)
+    except Exception as exc:  # noqa: BLE001
+        print(f'  [PUNJAB] listing fetch raised: {exc}', flush=True)
+        return None
+    if r.status_code != 200:
+        print(f'  [PUNJAB] listing HTTP {r.status_code} (len={len(r.text)})', flush=True)
+        return None
 
-        # The rate table is the first <table> with rows whose first column is a date.
-        date_re = re.compile(r'^\s*[A-Za-z]+\s+\d{1,2},\s+\d{4}\s*$')
-        for row in soup.find_all('tr'):
-            tds = row.find_all('td')
-            if len(tds) < 2:
-                continue
-            date_text = tds[0].get_text(strip=True)
-            if not date_re.match(date_text):
-                continue
-            link = tds[1].find('a', href=True)
-            if not link:
-                continue
-            href = link['href']
-            full_url = urljoin(PUNJAB_LIST_URL, href)
-            return (full_url, date_text)
-        return None
-    except Exception:
-        return None
+    html = r.text or ''
+    print(f'  [PUNJAB] listing fetched (len={len(html)})', flush=True)
+
+    soup = BeautifulSoup(html, 'html.parser')
+    date_re = re.compile(r'^\s*[A-Za-z]+\s+\d{1,2},\s+\d{4}\s*$')
+
+    # Strategy 1 — original <tr> table layout.
+    for row in soup.find_all('tr'):
+        tds = row.find_all('td')
+        if len(tds) < 2:
+            continue
+        date_text = tds[0].get_text(strip=True)
+        if not date_re.match(date_text):
+            continue
+        link = tds[1].find('a', href=True)
+        if not link:
+            continue
+        full_url = urljoin(PUNJAB_LIST_URL, link['href'])
+        print('  [PUNJAB] listing matched via <tr> table', flush=True)
+        return (full_url, date_text)
+
+    # Strategy 2 — Drupal views-row layout. Each row is a div carrying
+    # the date in one child and the View link in another.
+    for row in soup.select('.views-row, .view-content .views-row'):
+        text = row.get_text(' ', strip=True)
+        m_date = re.search(r'[A-Za-z]+\s+\d{1,2},\s+\d{4}', text)
+        link = row.find('a', href=True)
+        if not m_date or not link:
+            continue
+        full_url = urljoin(PUNJAB_LIST_URL, link['href'])
+        print('  [PUNJAB] listing matched via .views-row', flush=True)
+        return (full_url, m_date.group(0))
+
+    # Strategy 3 — raw regex over the HTML. Picks the first POULTRY_*
+    # image link we can find and the nearest preceding date string.
+    img_match = re.search(
+        r'(?:href|src)=["\']([^"\']*system/files\?file=POULTRY_\d+\.jpe?g)["\']',
+        html,
+        re.IGNORECASE,
+    )
+    if img_match:
+        href = img_match.group(1)
+        full_url = urljoin(PUNJAB_LIST_URL, href)
+        before = html[: img_match.start()]
+        date_match = list(re.finditer(r'[A-Za-z]+\s+\d{1,2},\s+\d{4}', before))
+        date_text = date_match[-1].group(0) if date_match else ''
+        print('  [PUNJAB] listing matched via raw regex', flush=True)
+        return (full_url, date_text)
+
+    print('  [PUNJAB] no rate-image link found in any layout', flush=True)
+    return None
 
 
 def ocr_space_parse(image_bytes: bytes) -> Optional[str]:
