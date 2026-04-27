@@ -301,38 +301,16 @@ class ChatbotView(APIView):
 
 
 _XAI_SYSTEM = (
-    "You are an expert poultry veterinarian helping a Pakistani farmer.\n"
-    "An image classifier predicted a disease class from a photo of chicken "
-    "faeces. The farmer asked for transparency. Produce TWO outputs in a "
-    "single STRICT JSON object — nothing else.\n\n"
-    "Schema:\n"
-    "{\n"
-    '  "explanation": "<60-120 words: visible evidence supporting the '
-    'class, 2-3 bullet-style observations prefixed with - , ending with '
-    'one line on what this means for the flock>",\n'
-    '  "farmer_note": "<2 short sentences for an action log: '
-    'plain-language diagnosis line + the single most urgent next step. '
-    'Mention the drug name + dosing window only when applicable.>"\n'
-    "}\n\n"
-    "RULES:\n"
-    "- Both fields use the SAME language the farmer asked in (Urdu or "
-    "English).\n"
-    "- Describe what you actually see in the image — colour, texture, "
-    "consistency, blood traces, mucus, chalky streaks, frothy appearance, "
-    "shape, undigested feed. Never invent symptoms not visible.\n"
-    "- If the prediction is Healthy, say why the sample looks normal "
-    "(brown/green, solid, moderate size, no blood). farmer_note should "
-    "tell them to keep monitoring.\n"
-    "- If the image clearly does NOT match the predicted class, say so "
-    "honestly in explanation; farmer_note should suggest a retake.\n"
-    "- No markdown. No asterisks, underscores, headings, code fences. "
-    "Plain text only inside the JSON strings.\n"
-    "- Don't quote probabilities back. Don't say 'the AI' or 'the model'. "
-    "Speak as if you examined the sample yourself.\n"
-    "- farmer_note must be short and concrete (under 220 characters). "
-    "It is auto-filled into the farmer's Notes field, so it has to read "
-    "like a vet's quick log entry, not a generic disclaimer.\n"
-    "- Return ONLY the JSON. No prose before or after."
+    "You are an expert poultry veterinarian writing a short XAI note for "
+    "a Pakistani farmer. Look at the cropped photo of chicken faeces and "
+    "describe the visible evidence — colour, texture, consistency, blood "
+    "traces, mucus, chalky streaks, frothy appearance, shape, undigested "
+    "feed. Tie observations to the predicted class. Never invent symptoms "
+    "not visible. If the prediction is Healthy, say why the sample looks "
+    "normal. If the image clearly does not match the predicted class, "
+    "say so honestly. Speak as if you examined the sample yourself; do "
+    "not say 'the AI' or 'the model'. No markdown, no asterisks, no "
+    "headings, no code fences."
 )
 
 
@@ -347,12 +325,23 @@ def _xai_prompt(disease_name: str, confidence: float,
         )[:3]
         runners = ', '.join(f'{k} {v:.1f}%' for k, v in top)
     lang_hint = 'Urdu' if language == 'ur' else 'English'
+    # Plain-text two-section format. Avoids JSON parsing fragility on
+    # free-tier vision calls. The XAI handler splits on EXPLANATION: /
+    # NOTE: headers — robust against extra whitespace or stray words.
     return (
         f"Predicted class: {disease_name} (confidence {confidence:.1f}%).\n"
         f"Top probabilities: {runners or 'n/a'}.\n"
-        f"Write the explanation in {lang_hint}.\n"
-        "Look at the attached crop image and explain what visual cues "
-        "support or contradict this prediction."
+        f"Write everything in {lang_hint}.\n\n"
+        "Output EXACTLY two sections separated by the headers below. No "
+        "other text outside these two sections.\n\n"
+        "EXPLANATION:\n"
+        "<60-120 words. One intro sentence on visible evidence, then 2-3 "
+        "specific observations prefixed with `- `, then one closing line "
+        "on what this means for the flock.>\n\n"
+        "NOTE:\n"
+        "<Short 1-2 sentence treatment log. Plain-language diagnosis line "
+        "plus the single most urgent next step. Mention the drug name + "
+        "dosing window only when applicable. Under 220 characters.>"
     )
 
 
@@ -426,12 +415,12 @@ class XaiExplainView(APIView):
         user_text = _xai_prompt(disease_name, confidence, probabilities, language)
 
         try:
-            # Note: the Gemini SDK occasionally returns an empty .text when
-            # the model emits content via candidates only, so we drop the
-            # response_mime_type='application/json' flag (it interacts
-            # badly with vision + system instructions on free tier) and
-            # rely on the prompt itself to ask for JSON. The defensive
-            # parser below handles both JSON and plain-text replies.
+            # Bake the system instruction into the user message instead of
+            # using the dedicated `system_instruction` config field —
+            # gemini-2.5-flash on the free tier sometimes ignores the
+            # system instruction when an image is attached, which was
+            # producing empty .text responses on every XAI call.
+            full_prompt = f"{_XAI_SYSTEM}\n\n{user_text}"
             response = _CLIENT.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=[
@@ -441,26 +430,22 @@ class XaiExplainView(APIView):
                             _GENAI_TYPES.Part.from_bytes(
                                 data=image_bytes, mime_type=mime,
                             ),
-                            _GENAI_TYPES.Part.from_text(text=user_text),
+                            _GENAI_TYPES.Part.from_text(text=full_prompt),
                         ],
                     ),
                 ],
                 config=_GENAI_TYPES.GenerateContentConfig(
-                    system_instruction=_XAI_SYSTEM,
                     temperature=0.4,
                     top_p=0.9,
-                    max_output_tokens=900,
+                    max_output_tokens=700,
                 ),
             )
 
             raw = (getattr(response, 'text', None) or '').strip()
-            # Some safety filters return an empty .text but the candidate
-            # still carries the model output in part.text — dig it out
-            # before declaring failure.
+            # SDK occasionally puts content only in candidates[*].parts.
             if not raw:
                 try:
-                    candidates = getattr(response, 'candidates', None) or []
-                    for cand in candidates:
+                    for cand in getattr(response, 'candidates', None) or []:
                         content = getattr(cand, 'content', None)
                         if not content:
                             continue
@@ -473,54 +458,45 @@ class XaiExplainView(APIView):
                             break
                 except Exception:
                     pass
+
             if not raw:
+                # Surface the prompt-feedback safety verdict so we can see
+                # whether the model blocked the image instead of silently
+                # returning empty.
+                fb = getattr(response, 'prompt_feedback', None)
                 logger.warning(
-                    'Gemini XAI returned empty response (lang=%s, disease=%s)',
-                    language, disease_name,
+                    'Gemini XAI empty response (lang=%s, disease=%s, feedback=%r)',
+                    language, disease_name, fb,
                 )
                 return Response(
                     {'error': 'empty_reply'},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
 
-            # Strip ``` fences if present.
-            if raw.startswith('```'):
-                raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
-                raw = re.sub(r'\n?```\s*$', '', raw)
-
-            # Try to extract a JSON object from the response. The model is
-            # asked for strict JSON, but on free-tier vision calls it can
-            # still slip into prose — in that case we treat the whole
-            # response as the explanation and leave farmer_note empty.
+            # Two-section parse: split on EXPLANATION:/NOTE: headers.
             explanation = ''
             farmer_note = ''
-            try:
-                parsed = json.loads(raw)
-                if isinstance(parsed, dict):
-                    explanation = str(parsed.get('explanation') or '').strip()
-                    farmer_note = str(parsed.get('farmer_note') or '').strip()
-            except ValueError:
-                # Search inside the body for the first {...} block — handles
-                # the case where the model prefixes a sentence to the JSON.
-                m = re.search(r'\{[\s\S]*\}', raw)
-                if m:
-                    try:
-                        parsed = json.loads(m.group(0))
-                        if isinstance(parsed, dict):
-                            explanation = str(parsed.get('explanation') or '').strip()
-                            farmer_note = str(parsed.get('farmer_note') or '').strip()
-                    except ValueError:
-                        explanation = raw
-                else:
-                    explanation = raw
+            m = re.search(
+                r'EXPLANATION\s*:\s*(.*?)(?:\n\s*NOTE\s*:\s*(.*))?$',
+                raw,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+            if m:
+                explanation = (m.group(1) or '').strip()
+                farmer_note = (m.group(2) or '').strip()
+            else:
+                # Fallback — model ignored the headers. Use the whole body
+                # as the explanation so the user still sees something.
+                explanation = raw
 
             if not explanation:
-                # Gemini emitted JSON but with empty fields — fall back to
-                # the raw body so the panel still has SOMETHING to show.
                 explanation = raw
 
             explanation = _strip_markdown(explanation)
             farmer_note = _strip_markdown(farmer_note) if farmer_note else ''
+            # Trim trailing artefacts like "EXPLANATION:" leaking through.
+            explanation = re.sub(r'^EXPLANATION\s*:\s*', '', explanation, flags=re.IGNORECASE)
+            farmer_note = re.sub(r'^NOTE\s*:\s*', '', farmer_note, flags=re.IGNORECASE)
             return Response({
                 'explanation': explanation,
                 'farmer_note': farmer_note,
