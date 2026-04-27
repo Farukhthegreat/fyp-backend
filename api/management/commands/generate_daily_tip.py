@@ -81,6 +81,9 @@ def _gen_with_fallback(client, contents, config):
                 or 'UNAVAILABLE' in msg
                 or '500 INTERNAL' in msg
                 or 'overloaded' in msg.lower()
+                or ' 429 ' in f' {msg} '
+                or 'RESOURCE_EXHAUSTED' in msg
+                or 'quota' in msg.lower()
             )
             last_exc = exc
             if not transient:

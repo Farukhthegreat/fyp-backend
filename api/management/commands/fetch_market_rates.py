@@ -429,7 +429,9 @@ def gemini_extract_rates(image_bytes: bytes) -> Optional[dict]:
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
             transient = ('503' in msg or 'UNAVAILABLE' in msg or '500 INTERNAL' in msg
-                         or 'overloaded' in msg.lower())
+                         or 'overloaded' in msg.lower()
+                         or '429' in msg or 'RESOURCE_EXHAUSTED' in msg
+                         or 'quota' in msg.lower())
             last_exc = exc
             if not transient:
                 return None
