@@ -425,6 +425,12 @@ class XaiExplainView(APIView):
         user_text = _xai_prompt(disease_name, confidence, probabilities, language)
 
         try:
+            # Note: the Gemini SDK occasionally returns an empty .text when
+            # the model emits content via candidates only, so we drop the
+            # response_mime_type='application/json' flag (it interacts
+            # badly with vision + system instructions on free tier) and
+            # rely on the prompt itself to ask for JSON. The defensive
+            # parser below handles both JSON and plain-text replies.
             response = _CLIENT.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=[
@@ -442,22 +448,49 @@ class XaiExplainView(APIView):
                     system_instruction=_XAI_SYSTEM,
                     temperature=0.4,
                     top_p=0.9,
-                    max_output_tokens=520,
-                    response_mime_type='application/json',
+                    max_output_tokens=900,
                 ),
             )
+
             raw = (getattr(response, 'text', None) or '').strip()
+            # Some safety filters return an empty .text but the candidate
+            # still carries the model output in part.text — dig it out
+            # before declaring failure.
             if not raw:
+                try:
+                    candidates = getattr(response, 'candidates', None) or []
+                    for cand in candidates:
+                        content = getattr(cand, 'content', None)
+                        if not content:
+                            continue
+                        for part in getattr(content, 'parts', None) or []:
+                            text = getattr(part, 'text', None)
+                            if text:
+                                raw = text.strip()
+                                break
+                        if raw:
+                            break
+                except Exception:
+                    pass
+            if not raw:
+                logger.warning(
+                    'Gemini XAI returned empty response (lang=%s, disease=%s)',
+                    language, disease_name,
+                )
                 return Response(
                     {'error': 'empty_reply'},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
-            # Gemini occasionally wraps the JSON in a code fence even with
-            # response_mime_type set, so trim defensively before parsing.
-            raw = raw.strip()
+
+            # Strip ``` fences if present.
             if raw.startswith('```'):
                 raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
                 raw = re.sub(r'\n?```\s*$', '', raw)
+
+            # Try to extract a JSON object from the response. The model is
+            # asked for strict JSON, but on free-tier vision calls it can
+            # still slip into prose — in that case we treat the whole
+            # response as the explanation and leave farmer_note empty.
             explanation = ''
             farmer_note = ''
             try:
@@ -466,17 +499,25 @@ class XaiExplainView(APIView):
                     explanation = str(parsed.get('explanation') or '').strip()
                     farmer_note = str(parsed.get('farmer_note') or '').strip()
             except ValueError:
-                # Backwards-compatible fallback — older clients still
-                # render the explanation only, so don't 500 if the model
-                # slips back into prose. Treat the entire body as the
-                # explanation in that case.
-                explanation = raw
+                # Search inside the body for the first {...} block — handles
+                # the case where the model prefixes a sentence to the JSON.
+                m = re.search(r'\{[\s\S]*\}', raw)
+                if m:
+                    try:
+                        parsed = json.loads(m.group(0))
+                        if isinstance(parsed, dict):
+                            explanation = str(parsed.get('explanation') or '').strip()
+                            farmer_note = str(parsed.get('farmer_note') or '').strip()
+                    except ValueError:
+                        explanation = raw
+                else:
+                    explanation = raw
 
             if not explanation:
-                return Response(
-                    {'error': 'empty_reply'},
-                    status=status.HTTP_502_BAD_GATEWAY,
-                )
+                # Gemini emitted JSON but with empty fields — fall back to
+                # the raw body so the panel still has SOMETHING to show.
+                explanation = raw
+
             explanation = _strip_markdown(explanation)
             farmer_note = _strip_markdown(farmer_note) if farmer_note else ''
             return Response({

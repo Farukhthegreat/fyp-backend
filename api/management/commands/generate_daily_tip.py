@@ -114,8 +114,7 @@ def call_gemini(today: dt.date, season: str, category: str) -> dict | None:
             ],
             config=types.GenerateContentConfig(
                 temperature=0.55,
-                max_output_tokens=900,
-                response_mime_type='application/json',
+                max_output_tokens=1200,
             ),
         )
         raw = (getattr(response, 'text', None) or '').strip()
@@ -124,7 +123,13 @@ def call_gemini(today: dt.date, season: str, category: str) -> dict | None:
         if raw.startswith('```'):
             raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
             raw = re.sub(r'\n?```\s*$', '', raw)
-        parsed = json.loads(raw)
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            m = re.search(r'\{[\s\S]*\}', raw)
+            if not m:
+                return None
+            parsed = json.loads(m.group(0))
         if not isinstance(parsed, dict):
             return None
         return {
