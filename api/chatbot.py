@@ -72,16 +72,17 @@ _MD_HEADING = re.compile(r'^\s{0,3}#{1,6}\s+', re.MULTILINE)
 _MD_BACKTICK = re.compile(r'`([^`]+)`')
 
 
-# Gemini model fallback chain. gemini-2.5-flash is the headline model
-# but its free-tier slot regularly returns 503 UNAVAILABLE during the
-# Pakistan evening surge — we retry the same call against quieter
-# models in order. flash-lite is cheaper and far less contended;
-# gemini-2.0-flash is a stable older sibling. Order matters: best
-# quality first, broadest availability last.
+# Gemini model fallback chain. Free-tier RPD limits drove the order:
+# 2.5-flash-lite has 250 RPD vs 2.5-flash's 20 RPD, so making it the
+# primary stops us from burning the small 2.5-flash bucket on chat /
+# brief / tip traffic. 2.0-flash sits second as a 200 RPD backup, and
+# 2.5-flash stays last as a higher-quality lifeline once the cheaper
+# tiers exhaust. Each model has its own quota bucket so a 429 on one
+# does not block the next.
 _GEMINI_FALLBACK_MODELS = (
-    'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
     'gemini-2.0-flash',
+    'gemini-2.5-flash',
 )
 
 

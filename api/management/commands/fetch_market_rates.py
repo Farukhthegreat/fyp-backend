@@ -373,7 +373,7 @@ def gemini_extract_rates(image_bytes: bytes) -> Optional[dict]:
         "live_retail 280-700, meat 350-900, egg_peti 5000-12000, "
         "egg_dozen 180-320."
     )
-    fallback_models = ('gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash')
+    fallback_models = ('gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-flash')
     last_exc = None
     try:
         client = genai.Client(api_key=api_key)
