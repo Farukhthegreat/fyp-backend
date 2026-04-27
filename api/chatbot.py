@@ -284,7 +284,7 @@ class ChatbotView(APIView):
         try:
             farm = Farm.objects.filter(user=request.user).first()
             if farm:
-                farm_name = farm.farm_name or ''
+                farm_name = farm.name or ''
         except Exception:  # noqa: BLE001
             logger.warning('Chatbot context: farm lookup failed', exc_info=True)
         try:
