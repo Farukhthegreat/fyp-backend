@@ -172,8 +172,31 @@ def call_gemini(today: dt.date, season: str, market: str) -> dict | None:
             ),
         )
         raw = (getattr(response, 'text', None) or '').strip()
+        # Walk candidates if .text is empty — same SDK quirk as XAI.
         if not raw:
+            try:
+                for cand in getattr(response, 'candidates', None) or []:
+                    content = getattr(cand, 'content', None)
+                    if not content:
+                        continue
+                    for part in getattr(content, 'parts', None) or []:
+                        text = getattr(part, 'text', None)
+                        if text:
+                            raw = text.strip()
+                            break
+                    if raw:
+                        break
+            except Exception:
+                pass
+        if not raw:
+            logger.warning(
+                'Daily brief Gemini empty response (feedback=%r)',
+                getattr(response, 'prompt_feedback', None),
+            )
             return None
+        # Surface a preview so we can see why parse fails.
+        preview = raw[:300].replace('\n', ' ')
+        logger.info('Daily brief raw preview: %s', preview)
         if raw.startswith('```'):
             raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
             raw = re.sub(r'\n?```\s*$', '', raw)
@@ -182,8 +205,13 @@ def call_gemini(today: dt.date, season: str, market: str) -> dict | None:
         except ValueError:
             m = re.search(r'\{[\s\S]*\}', raw)
             if not m:
+                logger.warning('Daily brief JSON not found in body: %s', preview)
                 return None
-            parsed = json.loads(m.group(0))
+            try:
+                parsed = json.loads(m.group(0))
+            except ValueError as exc:
+                logger.warning('Daily brief JSON parse failed: %s | body=%s', exc, preview)
+                return None
         if not isinstance(parsed, dict):
             return None
         return {
